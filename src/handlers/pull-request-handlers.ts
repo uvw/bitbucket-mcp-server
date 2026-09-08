@@ -1,6 +1,6 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { existsSync } from 'fs';
-import { BitbucketApiClient, CLOUD_MAX_PAGELEN, encodeRepoPath } from '../core/api-client.js';
+import { BitbucketApiClient, CLOUD_MAX_PAGELEN_PR_LIST, encodeRepoPath } from '../core/api-client.js';
 import {
   formatServerPullRequest,
   formatCloudPullRequest,
@@ -437,7 +437,10 @@ export class PullRequestHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for list_pull_requests');
     }
     const { workspace, repository, state = 'OPEN', author, role } = args;
-    const limit = args.limit ?? this.cfg.pagination.defaultListLimit;
+    const limit = this.apiClient.clampPageSize(
+      args.limit ?? this.cfg.pagination.defaultListLimit,
+      CLOUD_MAX_PAGELEN_PR_LIST
+    );
     const start = args.start ?? 0;
 
     try {
@@ -952,7 +955,7 @@ export class PullRequestHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for list_pr_commits');
     }
     const { workspace, repository, pull_request_id, include_build_status = false } = args;
-    const limit = args.limit ?? this.cfg.pagination.defaultListLimit;
+    const limit = this.apiClient.clampPageSize(args.limit ?? this.cfg.pagination.defaultListLimit);
     const start = args.start ?? 0;
 
     try {
@@ -974,9 +977,8 @@ export class PullRequestHandlers {
         // answers 400 "Invalid page" while `?pagelen=25` answers 200 — so it
         // has to be walked by following `next` and slicing the window out.
         // start=0, the only offset a first call ever uses, costs one request.
-        // pagelen is capped at Cloud's hard maximum of 100.
         let url: string | null = `${this.cloudPrPath(workspace, repository, pull_request_id)}/commits`;
-        let reqParams: any | undefined = { pagelen: Math.min(limit, CLOUD_MAX_PAGELEN) };
+        let reqParams: any | undefined = { pagelen: limit };
         const collected: any[] = [];
         for (let page = 0; page < this.cfg.pagination.commitsFilterMaxPages && url; page++) {
           const response: any = await this.apiClient.makeRequest<any>(

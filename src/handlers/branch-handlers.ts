@@ -42,7 +42,7 @@ export class BranchHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for list_branches');
     }
     const { workspace, repository, filter } = args;
-    const limit = args.limit ?? this.cfg.pagination.defaultListLimit;
+    const limit = this.apiClient.clampPageSize(args.limit ?? this.cfg.pagination.defaultListLimit);
     const start = args.start ?? 0;
 
     try {
@@ -253,7 +253,9 @@ export class BranchHandlers {
       workspace, repository, branch_name, since, until, author,
       include_merge_commits = true, search, include_build_status = false,
     } = args;
-    const limit = Math.min(args.limit ?? this.cfg.pagination.defaultListLimit, this.cfg.pagination.commitsPageLimit);
+    const limit = this.apiClient.clampPageSize(
+      Math.min(args.limit ?? this.cfg.pagination.defaultListLimit, this.cfg.pagination.commitsPageLimit)
+    );
     const start = args.start ?? 0;
 
     try {

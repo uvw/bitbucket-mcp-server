@@ -25,12 +25,20 @@ import { InFlightCoalescer, TtlMemo } from './cache.js';
 type HttpMethod = 'get' | 'post' | 'put' | 'delete';
 
 /**
- * Hard maximum Bitbucket Cloud accepts for `pagelen` on every paginated
- * endpoint. Anything above it is a 400 "Invalid pagelen" — measured: 100 -> 200,
- * 101 -> 400. Server/DC has no such cap, so Server-sized page sizes must be
- * clamped before they reach a Cloud request.
+ * Maximum `pagelen` Bitbucket Cloud accepts on most paginated endpoints.
+ * Above it the answer is 400 "Invalid pagelen" — measured: 100 -> 200,
+ * 101 -> 400 on /src, /commits and /refs/branches. Server/DC has no such cap,
+ * so Server-sized page sizes must be clamped before reaching a Cloud request.
  */
 export const CLOUD_MAX_PAGELEN = 100;
+
+/**
+ * The PR *list* endpoint caps lower than the rest — measured on
+ * /repositories/{ws}/{repo}/pullrequests: 50 -> 200, 51 -> 400 "Invalid
+ * pagelen". The ceiling is per-endpoint on Cloud, so it cannot be assumed
+ * uniform; pass the right one to clampPageSize.
+ */
+export const CLOUD_MAX_PAGELEN_PR_LIST = 50;
 
 /** Percent-encode a repo file path per segment (spaces, %, #, ? in filenames). */
 export function encodeRepoPath(path: string): string {
@@ -67,6 +75,23 @@ export class BitbucketApiClient {
       axiosConfig.auth = { username: auth.username, password: auth.appPassword };
     }
     this.axiosInstance = axios.create(axiosConfig);
+  }
+
+  /**
+   * Clamp a caller-supplied page size to what the target actually accepts.
+   * Cloud rejects anything above its ceiling with 400 "Invalid pagelen", and
+   * that ceiling is per-endpoint (100 on most, 50 on the PR list) — pass
+   * `cloudMax` when it is not the usual 100. Server/DC has no such ceiling,
+   * so its limits pass through untouched.
+   *
+   * This deliberately clamps the LIMIT rather than the wire `pagelen`.
+   * Clamping only the wire value would leave has_more/next_start computed from
+   * the caller's original number, so a limit=200 request would return 100 rows
+   * while next_start advanced by 200 — silently skipping the 100 in between.
+   * A short page is fine; a page that lies about where it ended is not.
+   */
+  clampPageSize(limit: number, cloudMax: number = CLOUD_MAX_PAGELEN): number {
+    return this.isServer ? limit : Math.min(limit, cloudMax);
   }
 
   getIsServer(): boolean {

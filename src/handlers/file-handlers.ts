@@ -60,7 +60,8 @@ export class FileHandlers {
         // is a 404 on Cloud, `/src/{ref}/` is the directory. dirPath being ''
         // leaves exactly that slash behind.
         let url: string | null = `/repositories/${workspace}/${repository}/src/${ref}/${dirPath}`;
-        let params: any | undefined = { pagelen: pagination.dirPageLimit };
+        // dirPageLimit defaults to a Server-sized 1000; Cloud 400s above 100.
+        let params: any | undefined = { pagelen: this.apiClient.clampPageSize(pagination.dirPageLimit) };
         for (let page = 0; page < pagination.browseMaxPages && url; page++) {
           const response: any = await this.apiClient.makeRequest<any>('get', url, undefined, params ? { params } : undefined);
           entries.push(
