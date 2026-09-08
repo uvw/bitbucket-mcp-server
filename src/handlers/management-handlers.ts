@@ -48,14 +48,24 @@ export class ManagementHandlers {
     throw new McpError(ErrorCode.InvalidParams, `${what} needs either repository or project_key.`);
   }
 
-  private repoOnly(args: any, what: string): { base: string; label: string } {
+  /**
+   * Repository base path for a tool with no project scope.
+   *
+   * `projectKeyIsField` matters: on update_repository_settings, project_key is
+   * the project to MOVE the repository into, not a scope selector. Everywhere
+   * else it can only be a caller mistake, and accepting it silently would read
+   * as a project-wide change that hit one repository.
+   */
+  private repoOnly(
+    args: any,
+    what: string,
+    opts: { projectKeyIsField?: boolean } = {}
+  ): { base: string; label: string } {
     const { workspace, repository, project_key } = args;
     if (!repository) {
       throw new McpError(ErrorCode.InvalidParams, `${what} is repository-scoped. Pass repository.`);
     }
-    // Accepting and ignoring project_key would read as a project-wide change
-    // that silently hit one repository.
-    if (project_key) {
+    if (project_key && !opts.projectKeyIsField) {
       throw new McpError(
         ErrorCode.InvalidParams,
         `${what} has no project scope. Drop project_key, or use a tool that accepts it.`
@@ -73,7 +83,8 @@ export class ManagementHandlers {
     try {
       return await this.apiClient.makeRequest<T>(method, path, body);
     } catch (error: any) {
-      const detail = error?.originalError?.response?.data?.error?.detail ?? error?.response?.data?.error?.detail;
+      const apiError = error?.originalError?.response?.data?.error ?? error?.response?.data?.error;
+      const detail = apiError?.detail;
       const required: string[] | undefined = detail?.required;
       if (required?.length) {
         throw new McpError(
@@ -81,6 +92,12 @@ export class ManagementHandlers {
           `Bitbucket refused this call for lack of token scope. Required: ${required.join(', ')}. ` +
             `Re-mint the token with that scope ticked. Repository permissions are not the problem.`
         );
+      }
+      // Bitbucket explains most 400s in error.detail, and dropping it leaves a
+      // bare "Bad request". "Cannot stop pipeline result that is already
+      // complete" is the difference between a diagnosis and a guess.
+      if (typeof detail === 'string' && detail) {
+        throw new McpError(ErrorCode.InvalidRequest, `${apiError?.message ?? 'Bitbucket rejected the request'}: ${detail}`);
       }
       throw error;
     }
@@ -184,7 +201,7 @@ export class ManagementHandlers {
     if (!g.isUpdateRepositorySettingsArgs(args)) {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for update_repository_settings');
     }
-    const { base, label } = this.repoOnly(args, 'update_repository_settings');
+    const { base, label } = this.repoOnly(args, 'update_repository_settings', { projectKeyIsField: true });
     const body: any = {};
     if (args.name !== undefined) body.name = args.name;
     if (args.description !== undefined) body.description = args.description;

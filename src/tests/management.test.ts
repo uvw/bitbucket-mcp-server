@@ -267,3 +267,47 @@ test('branch restriction set updates the existing record rather than adding one'
   assert.equal(put!.path, '/repositories/w/r/branch-restrictions/7');
   assert.equal(put!.body.value, 2);
 });
+
+test('project_key is a field on update_repository_settings, a mistake elsewhere', async () => {
+  const { h, sent } = stubHandlers();
+  // Moving a repository into a project is a legitimate edit, so the guard that
+  // rejects project_key on repo-only tools must not reach this one.
+  await h.handleUpdateRepositorySettings({
+    workspace: 'w', repository: 'r', project_key: 'LIB',
+  });
+  const put = sent.find(s => s.method === 'put');
+  assert.equal(put!.path, '/repositories/w/r');
+  assert.deepEqual(put!.body.project, { key: 'LIB' });
+  // Still refused where it can only be a mistake.
+  await assert.rejects(
+    () => h.handleManagePipelinesConfig({ workspace: 'w', repository: 'r', enabled: true, project_key: 'LIB' }),
+    /no project scope/
+  );
+});
+
+test("Bitbucket's error detail is surfaced, not flattened to Bad request", async () => {
+  const sent: Sent[] = [];
+  const client: any = {
+    clampPageSize: (n: number) => n,
+    invalidateRef: () => {},
+    getIsServer: () => false,
+    makeRequest: async (method: string, path: string) => {
+      sent.push({ method, path });
+      throw {
+        status: 400,
+        message: 'Bad request',
+        originalError: {
+          response: {
+            status: 400,
+            data: { error: { message: 'Bad request', detail: 'Cannot stop pipeline result that is already complete with status PASSED' } },
+          },
+        },
+      };
+    },
+  };
+  const h = new ManagementHandlers(client, { pagination: { defaultListLimit: 25 }, output: {} } as any);
+  await assert.rejects(
+    () => h.handleManagePipelineRun({ workspace: 'w', repository: 'r', action: 'stop', pipeline_uuid: 'p' }),
+    /already complete with status PASSED/
+  );
+});
