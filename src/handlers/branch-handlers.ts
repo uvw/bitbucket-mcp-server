@@ -226,6 +226,30 @@ export class BranchHandlers {
           if (!ok) throw deleteError;
         }
       } else {
+        // Cloud's DELETE has no compare-and-swap, so expected_head has to be
+        // enforced here rather than passed along. Unenforced, a caller guarding
+        // against a branch that moved under them gets no guard and no warning:
+        // a deliberately wrong SHA still deletes the branch. This is
+        // check-then-delete, not an atomic CAS, so a push landing in the gap
+        // still slips through. It guards a stale expectation, not a race.
+        if (expected_head) {
+          const ref = await this.apiClient.makeRequest<any>(
+            'get',
+            `/repositories/${workspace}/${repository}/refs/branches/${encodeURIComponent(branch_name)}`
+          );
+          const head: string | undefined = ref?.target?.hash;
+          if (!head) return errorContent(`Branch '${branch_name}' not found`);
+          const expected = String(expected_head).toLowerCase();
+          const actual = head.toLowerCase();
+          // Accept an abbreviated SHA, but only as a real prefix of a sane length.
+          const agrees = expected.length >= 7 ? actual.startsWith(expected) : actual === expected;
+          if (!agrees) {
+            return errorContent(
+              `Refusing to delete '${branch_name}': its head is ${head}, but expected_head was ${expected_head}. ` +
+                `The branch moved. Re-read it and retry if the deletion is still what you want.`
+            );
+          }
+        }
         try {
           await this.apiClient.makeRequest<any>('delete', `/repositories/${workspace}/${repository}/refs/branches/${encodeURIComponent(branch_name)}`);
         } catch (deleteError: any) {
