@@ -1,5 +1,5 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import type { RegisteredTool, ToolDefinition, ToolHandler, ToolResponse } from '../types/index.js';
+import type { ConfigManagement, RegisteredTool, ToolDefinition, ToolHandler, ToolResponse } from '../types/index.js';
 
 // Tool registry: single source of truth for what is exposed AND what is
 // callable. Group/availability filtering is enforced at dispatch too — a
@@ -11,7 +11,8 @@ export class ToolRegistry {
 
   constructor(
     private readonly isServer: boolean,
-    private readonly enabledGroups: string[] | null
+    private readonly enabledGroups: string[] | null,
+    private readonly management: ConfigManagement = { enabled: false, allowWrite: false }
   ) {}
 
   register(definition: ToolDefinition, handler: ToolHandler): void {
@@ -23,6 +24,15 @@ export class ToolRegistry {
 
   private isExposed(tool: RegisteredTool): boolean {
     if (tool.availability === 'server_only' && !this.isServer) return false;
+    if (tool.availability === 'cloud_only' && this.isServer) return false;
+    // Management is opt-in, and its writes are opt-in again. enabledGroups
+    // cannot serve this: it is null whenever BITBUCKET_TOOL_GROUPS is unset, and
+    // null means every group, so a new group would be live in every session.
+    // These tools change branch permissions and delete repositories.
+    if (tool.group === 'management') {
+      if (!this.management.enabled) return false;
+      if (tool.mutates && !this.management.allowWrite) return false;
+    }
     if (this.enabledGroups && !this.enabledGroups.includes(tool.group)) return false;
     return true;
   }

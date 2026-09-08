@@ -1,35 +1,53 @@
 # Bitbucket MCP Server Setup Guide
 
-## Step 1: Find Your Bitbucket Username
+## Step 1: Choose a credential
 
-1. **Log in to Bitbucket**: Go to https://bitbucket.org and log in with your credentials
+Bitbucket Cloud offers three, and they authenticate differently. Pick by blast
+radius.
 
-2. **Find your username**:
-   - After logging in, click on your profile avatar in the top-right corner
-   - Click on "Personal settings" or go directly to: https://bitbucket.org/account/settings/
-   - Your username will be displayed at the top of the page
-   - **Note**: Your username is NOT your email address. It's usually a shorter identifier like "johndoe" or "jdoe123"
+| Credential | Auth | Reaches | Use it for |
+|---|---|---|---|
+| **API token with scopes** | Basic — your **email** + the token | everything your account can | day-to-day use across many repos |
+| **Repository access token** | **Bearer** — no username | exactly one repository | automation, and anything you are still testing |
+| **Workspace access token** | **Bearer** — no username | one workspace | fleet-wide automation |
 
-## Step 2: Create an App Password
+Access tokens reject Basic auth outright, so they must go in `BITBUCKET_TOKEN`.
+That is bearer auth and needs no username. It does **not** switch the server to
+Server/DC — the dialect comes from the base URL (see `BITBUCKET_DIALECT` in the
+README).
 
-1. **Navigate to App Passwords**:
-   - While logged in, go to: https://bitbucket.org/account/settings/app-passwords/
-   - Or from your account settings, look for "App passwords" in the left sidebar under "Access management"
+App passwords still work but are on the way out; prefer an API token.
 
-2. **Create a new app password**:
-   - Click the "Create app password" button
-   - Give it a descriptive label like "MCP Server" or "Bitbucket MCP Integration"
-   
-3. **Select permissions** (IMPORTANT - select these specific permissions):
-   - ✅ **Account**: Read
-   - ✅ **Repositories**: Read, Write
-   - ✅ **Pull requests**: Read, Write
-   - You can leave other permissions unchecked
+## Step 2: Create it
 
-4. **Generate the password**:
-   - Click "Create"
-   - **IMPORTANT**: Copy the generated password immediately! It will look something like: `ATBBxxxxxxxxxxxxxxxxxxxxx`
-   - You won't be able to see this password again after closing the dialog
+**API token with scopes** — <https://id.atlassian.com/manage-profile/security/api-tokens>,
+"Create API token **with scopes**", then choose Bitbucket. Minimum for the
+default tool set:
+
+- Account: Read
+- Repositories: Read, Write
+- Pull requests: Read, Write
+
+Add these only if you intend to use the management tools:
+
+- Repositories: **Admin** — branch restrictions, branching model, Pipelines
+  on/off, repository settings, default reviewers, deploy keys, repo creation
+- Pipelines: **Admin** — pipeline variables and deployment environments
+- Projects: **Admin** — project-scope settings
+- Webhooks: Read, Write, **Delete** — deleting a webhook is a separate scope
+  from creating one
+- Repositories: **Delete** — only for `delete_repository`
+
+**Repository or workspace access token** — repository or workspace settings →
+Access tokens. The same Admin scopes appear there, limited to that
+repository/workspace.
+
+Copy the value immediately; it is shown once.
+
+Your credentials are what your account can already do, narrowed by scope. If a
+call fails with 403, read `error.detail.required` in the response: it names the
+exact scope that was missing, and that is usually a box you did not tick rather
+than a repository permission.
 
 ## Step 3: Find Your Workspace (Optional but Recommended)
 
@@ -47,17 +65,33 @@ Your workspace is the organization or team name in Bitbucket. To find it:
 
 Here's what your credentials should look like:
 
+Basic auth, with an API token:
+
 ```
-Username: johndoe              # Your Bitbucket username (NOT email)
-App Password: ATBB3xXx...      # The generated app password
-Workspace: mycompany           # Your organization/workspace name
+BITBUCKET_USERNAME=you@example.com   # your Atlassian account email
+BITBUCKET_APP_PASSWORD=ATATT3x...    # the API token
+```
+
+Bearer auth, with a repository or workspace access token:
+
+```
+BITBUCKET_TOKEN=ATCTT3x...           # no username needed
+```
+
+To turn the management tools on (both are off by default):
+
+```
+BITBUCKET_MANAGEMENT=true            # exposes the read tools
+BITBUCKET_MANAGEMENT_WRITE=true      # also allows the mutating ones
 ```
 
 ## Common Issues
 
-1. **"Username not found"**: Make sure you're using your Bitbucket username, not your email address
-2. **"Invalid app password"**: Ensure you copied the entire app password including the "ATBB" prefix
-3. **"Permission denied"**: Check that your app password has the required permissions (Account: Read, Repositories: Read/Write, Pull requests: Read/Write)
+1. **401 with an API token**: `BITBUCKET_USERNAME` must be your account **email**, not your Bitbucket nickname.
+2. **401 with an access token**: those are bearer-only. Put it in `BITBUCKET_TOKEN`, not `BITBUCKET_APP_PASSWORD`, and leave the username unset.
+3. **403 "Your credentials lack one or more required privilege scopes"**: the response's `error.detail.required` names the scope. Re-mint with it ticked — this is not a repository-permission problem.
+4. **A management tool is missing from the tool list**: it is opt-in. Set `BITBUCKET_MANAGEMENT=true`, and `BITBUCKET_MANAGEMENT_WRITE=true` for the mutating ones, then restart the client.
+5. **Truncated secret**: seeding a long token through a shell prompt can clip it at 128 characters. API tokens are longer than that — check the stored length.
 
 ## Next Steps
 

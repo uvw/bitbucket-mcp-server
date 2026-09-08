@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — fork `feat/management`
+
+Repository administration behind two opt-in gates, plus the auth change it
+needed. Cloud only; Server/DC exposes a different admin API entirely.
+
+### Added
+
+- **23 repository-management tools (`management` group).** Branch restrictions (all 18 kinds, glob or branching-model matching, user/group exemptions), branching model, repository settings, default reviewers, repository permissions, Pipelines on/off, pipeline variables (repo/workspace/deployment-environment), pipeline runs, webhooks, deploy keys, deployment environments, and repository create/delete. Most accept `project_key` instead of `repository` to apply at **project** scope — one call per project rather than per repository.
+- **Two independent gates.** `BITBUCKET_MANAGEMENT` exposes the group; `BITBUCKET_MANAGEMENT_WRITE` is required again for anything mutating, so the read side can audit a fleet while writes stay impossible. Both default off, and a gated-off tool is not callable by name — `BITBUCKET_TOOL_GROUPS` could not serve this, since unset means "every group".
+- **`dry_run` on every mutating management tool.** Reports the request that would be sent plus the current value, and sends nothing.
+- **`BITBUCKET_DIALECT`** to force `cloud` or `server` when the base URL is not self-evident.
+- **`cloud_only` tool availability**, alongside the existing `both` / `server_only`.
+
+### Changed
+
+- **The API dialect now comes from the base URL, not from which credential field is set.** `isServer = !!auth.token` conflated auth scheme with API shape: an ambient `BITBUCKET_TOKEN` silently drove a Cloud server with Server/DC paths (every request 404ing while auth looked fine), and Cloud could not be used with a bearer credential at all — which is what Bitbucket Cloud repository and workspace access tokens require, since they reject Basic auth.
+- **`BITBUCKET_USERNAME` is no longer required with a bearer token.** Access tokens have no username. The Server participants path still needs one and now says so.
+- **Insufficient-scope 403s surface `error.detail.required` verbatim.** A generic 403 sends people hunting through repository permissions for what is actually an unticked box at mint time.
+- **`set` operations are idempotent under an inconsistent listing.** Bitbucket's pipeline-variables collection is eventually consistent — a variable created a moment earlier is absent from the next listing — so create-then-conflict falls back to reading again and updating. Branch restrictions get the same treatment; they report the clash in prose rather than a 409.
+
 ## [3.0.0] - 2026-07-09
 
 Complete revamp: grep-like repo search, drastically fewer Bitbucket API calls, rate-limit-safe transport, compact token-efficient responses, and a consolidated 25-tool surface. Design and verified API research in `REVAMP_PLAN.md`.

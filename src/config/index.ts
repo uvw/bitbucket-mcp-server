@@ -16,6 +16,7 @@ export const ALL_TOOL_GROUPS: ToolGroup[] = [
   'search',
   'attachments',
   'discovery',
+  'management',
 ];
 
 type Env = Record<string, string | undefined>;
@@ -45,6 +46,21 @@ function envBool(env: Env, names: string[], fallback: boolean): boolean {
   const raw = pick(env, names);
   if (raw === undefined) return fallback;
   return !['false', '0', 'no', 'off'].includes(raw.toLowerCase());
+}
+
+/**
+ * Explicit dialect override. Unset lets the base URL decide. An unrecognised
+ * value is reported and ignored rather than picking a side silently.
+ */
+function parseDialect(env: Env): 'cloud' | 'server' | undefined {
+  const raw = pick(env, ['BITBUCKET_DIALECT']);
+  if (!raw) return undefined;
+  const v = raw.trim().toLowerCase();
+  if (v === 'cloud' || v === 'server') return v;
+  console.error(
+    `[bitbucket-mcp] Unknown BITBUCKET_DIALECT "${raw}". Expected "cloud" or "server". Falling back to the base URL.`
+  );
+  return undefined;
 }
 
 function parseToolGroups(env: Env): string[] | null {
@@ -79,6 +95,7 @@ export function loadConfig(env: Env = process.env): BitbucketMcpConfig {
       username: pick(env, ['BITBUCKET_USERNAME']) ?? '',
       appPassword: pick(env, ['BITBUCKET_APP_PASSWORD']),
       token: pick(env, ['BITBUCKET_TOKEN']),
+      dialect: parseDialect(env),
     },
     http: {
       timeoutMs: envNum(env, ['BITBUCKET_HTTP_TIMEOUT_MS'], 30_000, { min: 0 }),
@@ -160,6 +177,10 @@ export function loadConfig(env: Env = process.env): BitbucketMcpConfig {
       snippetMatchListMax: envNum(env, ['BITBUCKET_SNIPPET_MATCH_LIST_MAX'], 5, { min: 1 }),
     },
     toolGroups: parseToolGroups(env),
+    management: {
+      enabled: envBool(env, ['BITBUCKET_MANAGEMENT'], false),
+      allowWrite: envBool(env, ['BITBUCKET_MANAGEMENT_WRITE'], false),
+    },
   };
 }
 
@@ -172,6 +193,9 @@ export const CONFIG_REFERENCE: Array<{ env: string; def: string; description: st
   { env: 'BITBUCKET_USERNAME', def: '(required)', description: 'Username the credentials belong to' },
   { env: 'BITBUCKET_APP_PASSWORD', def: '—', description: 'Bitbucket Cloud app password (basic auth)' },
   { env: 'BITBUCKET_TOKEN', def: '—', description: 'Bitbucket Server/DC personal access token (bearer)' },
+  { env: 'BITBUCKET_DIALECT', def: '(from base URL)', description: 'Force the API dialect: "cloud" or "server"' },
+  { env: 'BITBUCKET_MANAGEMENT', def: 'false', description: 'Expose the repository-management tools' },
+  { env: 'BITBUCKET_MANAGEMENT_WRITE', def: 'false', description: 'Allow the MUTATING management tools (needs BITBUCKET_MANAGEMENT)' },
   { env: 'BITBUCKET_HTTP_TIMEOUT_MS', def: '30000', description: 'Per-request timeout for REST calls' },
   { env: 'BITBUCKET_ARCHIVE_TIMEOUT_MS', def: '300000', description: 'Timeout for archive (tar.gz) download streams' },
   { env: 'BITBUCKET_ARCHIVE_STALL_MS', def: '60000', description: 'Destroy an archive stream after this much inactivity' },

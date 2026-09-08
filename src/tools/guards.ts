@@ -243,3 +243,155 @@ export function isManageAttachmentsArgs(a: any): a is {
   return repoScoped(a) && ['download', 'delete'].includes(a.action) &&
     (typeof a.attachment_id === 'string' || typeof a.attachment_id === 'number');
 }
+
+// ── Repository management ────────────────────────────────────────────────────
+// Every management tool needs a workspace. `repository` and `project_key` stay
+// optional here and the handler reconciles them, since it knows whether the
+// tool is repo-only or repo-or-project. Requiring one in the guard would reject
+// the other scope before the handler could explain the difference.
+
+const mgmtBase = (a: any): boolean => isObj(a) && str(a.workspace) && optStr(a.repository) && optStr(a.project_key);
+const mgmtWrite = (a: any): boolean => mgmtBase(a) && optBool(a.dry_run);
+
+export function isManagementReadArgs(a: any): a is {
+  workspace: string; repository?: string; limit?: number;
+} {
+  return mgmtBase(a) && optPosInt(a.limit);
+}
+
+export function isManagementScopedReadArgs(a: any): a is {
+  workspace: string; repository?: string; project_key?: string; limit?: number;
+} {
+  return mgmtBase(a) && optPosInt(a.limit);
+}
+
+export function isUpdateRepositorySettingsArgs(a: any): a is {
+  workspace: string; repository: string; name?: string; description?: string;
+  is_private?: boolean; fork_policy?: string; has_issues?: boolean; has_wiki?: boolean;
+  language?: string; main_branch?: string; project_key?: string; dry_run?: boolean;
+} {
+  return mgmtWrite(a) && optStr(a.name) && optStr(a.description) && optBool(a.is_private) &&
+    optStr(a.fork_policy) && optBool(a.has_issues) && optBool(a.has_wiki) &&
+    optStr(a.language) && optStr(a.main_branch);
+}
+
+export function isManageBranchRestrictionArgs(a: any): a is {
+  workspace: string; repository: string; action: 'set' | 'delete'; kind?: string;
+  pattern?: string; branch_match_kind?: 'glob' | 'branching_model'; branch_type?: string;
+  value?: number; users?: string[]; groups?: string[]; restriction_id?: number; dry_run?: boolean;
+} {
+  return mgmtWrite(a) && ['set', 'delete'].includes(a.action as string) &&
+    optStr(a.kind) && optStr(a.pattern) && optStr(a.branch_type) &&
+    (a.branch_match_kind === undefined || ['glob', 'branching_model'].includes(a.branch_match_kind as string)) &&
+    optInt(a.value) && optStrArr(a.users) && optStrArr(a.groups) && optPosInt(a.restriction_id);
+}
+
+export function isManageBranchingModelArgs(a: any): a is {
+  workspace: string; repository?: string; project_key?: string;
+  development?: object; production?: object; branch_types?: object[]; dry_run?: boolean;
+} {
+  return mgmtWrite(a) &&
+    (a.development === undefined || isObj(a.development)) &&
+    (a.production === undefined || isObj(a.production)) &&
+    (a.branch_types === undefined || (Array.isArray(a.branch_types) && a.branch_types.every(isObj)));
+}
+
+export function isManageDefaultReviewerArgs(a: any): a is {
+  workspace: string; repository?: string; project_key?: string;
+  action: 'add' | 'remove'; user: string; dry_run?: boolean;
+} {
+  return mgmtWrite(a) && ['add', 'remove'].includes(a.action as string) && str(a.user);
+}
+
+export function isManageRepositoryPermissionArgs(a: any): a is {
+  workspace: string; repository?: string; project_key?: string;
+  action: 'set' | 'remove'; user?: string; group?: string;
+  permission?: 'read' | 'write' | 'admin'; dry_run?: boolean;
+} {
+  if (!mgmtWrite(a) || !['set', 'remove'].includes(a.action as string)) return false;
+  if (!optStr(a.user) || !optStr(a.group)) return false;
+  // Exactly one subject: both would be ambiguous, neither has no target.
+  if (!!a.user === !!a.group) return false;
+  return a.permission === undefined || ['read', 'write', 'admin'].includes(a.permission as string);
+}
+
+export function isManagePipelinesConfigArgs(a: any): a is {
+  workspace: string; repository: string; enabled: boolean; dry_run?: boolean;
+} {
+  return mgmtWrite(a) && typeof a.enabled === 'boolean';
+}
+
+export function isListPipelineVariablesArgs(a: any): a is {
+  workspace: string; repository?: string; environment_uuid?: string; limit?: number;
+} {
+  return mgmtBase(a) && optStr(a.environment_uuid) && optPosInt(a.limit);
+}
+
+export function isManagePipelineVariableArgs(a: any): a is {
+  workspace: string; repository?: string; environment_uuid?: string;
+  action: 'set' | 'delete'; key?: string; value?: string; secured?: boolean;
+  variable_uuid?: string; dry_run?: boolean;
+} {
+  return mgmtWrite(a) && ['set', 'delete'].includes(a.action as string) &&
+    optStr(a.environment_uuid) && optStr(a.key) && optStr(a.value) &&
+    optBool(a.secured) && optStr(a.variable_uuid);
+}
+
+export function isManagePipelineRunArgs(a: any): a is {
+  workspace: string; repository: string; action: 'trigger' | 'stop';
+  ref_name?: string; ref_type?: string; selector_type?: string; selector_pattern?: string;
+  variables?: object[]; pipeline_uuid?: string; dry_run?: boolean;
+} {
+  return mgmtWrite(a) && ['trigger', 'stop'].includes(a.action as string) &&
+    optStr(a.ref_name) && optStr(a.ref_type) && optStr(a.selector_type) &&
+    optStr(a.selector_pattern) && optStr(a.pipeline_uuid) &&
+    (a.variables === undefined || (Array.isArray(a.variables) && a.variables.every(isObj)));
+}
+
+export function isListWebhooksArgs(a: any): a is {
+  workspace: string; repository?: string; limit?: number;
+} {
+  return mgmtBase(a) && optPosInt(a.limit);
+}
+
+export function isManageWebhookArgs(a: any): a is {
+  workspace: string; repository?: string; action: 'create' | 'update' | 'delete';
+  uuid?: string; url?: string; description?: string; active?: boolean;
+  events?: string[]; dry_run?: boolean;
+} {
+  return mgmtWrite(a) && ['create', 'update', 'delete'].includes(a.action as string) &&
+    optStr(a.uuid) && optStr(a.url) && optStr(a.description) && optBool(a.active) && optStrArr(a.events);
+}
+
+export function isManageDeployKeyArgs(a: any): a is {
+  workspace: string; repository: string; action: 'add' | 'delete';
+  key?: string; label?: string; key_id?: number; dry_run?: boolean;
+} {
+  return mgmtWrite(a) && ['add', 'delete'].includes(a.action as string) &&
+    optStr(a.key) && optStr(a.label) && optPosInt(a.key_id);
+}
+
+export function isManageEnvironmentArgs(a: any): a is {
+  workspace: string; repository: string; action: 'create' | 'delete';
+  name?: string; environment_type?: string; rank?: number;
+  environment_uuid?: string; dry_run?: boolean;
+} {
+  return mgmtWrite(a) && ['create', 'delete'].includes(a.action as string) &&
+    optStr(a.name) && optStr(a.environment_type) && optNonNegInt(a.rank) && optStr(a.environment_uuid);
+}
+
+export function isCreateRepositoryArgs(a: any): a is {
+  workspace: string; repository: string; name?: string; description?: string;
+  is_private?: boolean; fork_policy?: string; has_issues?: boolean; has_wiki?: boolean;
+  language?: string; project_key?: string; dry_run?: boolean;
+} {
+  return repoScoped(a) && optBool(a.dry_run) && optStr(a.name) && optStr(a.description) &&
+    optBool(a.is_private) && optStr(a.fork_policy) && optBool(a.has_issues) &&
+    optBool(a.has_wiki) && optStr(a.language) && optStr(a.project_key);
+}
+
+export function isDeleteRepositoryArgs(a: any): a is {
+  workspace: string; repository: string; confirm_full_name: string; dry_run?: boolean;
+} {
+  return repoScoped(a) && optBool(a.dry_run) && str(a.confirm_full_name);
+}

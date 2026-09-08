@@ -9,9 +9,10 @@ export type ToolGroup =
   | 'files'
   | 'search'
   | 'attachments'
-  | 'discovery';
+  | 'discovery'
+  | 'management';
 
-export type ToolAvailability = 'both' | 'server_only';
+export type ToolAvailability = 'both' | 'server_only' | 'cloud_only';
 
 export type ToolResponse = {
   content: Array<{ type: string; [key: string]: unknown }>;
@@ -26,6 +27,12 @@ export type ToolDefinition = {
   inputSchema: object;
   group: ToolGroup;
   availability: ToolAvailability;
+  /**
+   * Does this tool change remote state? Only consulted for the management
+   * group, where writes sit behind their own gate so reads can be enabled
+   * alone.
+   */
+  mutates?: boolean;
 };
 
 export type RegisteredTool = ToolDefinition & {

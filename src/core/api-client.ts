@@ -25,18 +25,16 @@ import { InFlightCoalescer, TtlMemo } from './cache.js';
 type HttpMethod = 'get' | 'post' | 'put' | 'delete';
 
 /**
- * Maximum `pagelen` Bitbucket Cloud accepts on most paginated endpoints.
- * Above it the answer is 400 "Invalid pagelen" — measured: 100 -> 200,
- * 101 -> 400 on /src, /commits and /refs/branches. Server/DC has no such cap,
- * so Server-sized page sizes must be clamped before reaching a Cloud request.
+ * Maximum `pagelen` Cloud accepts on most paginated endpoints. Above it the
+ * answer is 400 "Invalid pagelen": 100 works, 101 fails on /src, /commits and
+ * /refs/branches. Server/DC has no cap, so its page sizes need clamping before
+ * they reach a Cloud request.
  */
 /**
- * Is this base URL Bitbucket Cloud? Cloud lives at exactly one API host, so
- * anything else is a Server/Data Centre instance. Deriving the dialect from
- * the URL keeps it independent of the credential type: Cloud accepts Basic
- * (email + API token) *and* Bearer (repository/workspace access tokens), while
- * Server/DC uses Bearer personal access tokens — the scheme says nothing about
- * which API shape to speak.
+ * Is this base URL Bitbucket Cloud? Cloud lives at one API host, so anything
+ * else is a Server/DC instance. Keeping the dialect on the URL leaves it
+ * independent of the credential. The auth scheme says nothing about which API
+ * shape to speak.
  */
 export function isCloudBaseUrl(baseUrl: string | undefined): boolean {
   if (!baseUrl) return true; // default baseUrl is the Cloud API root
@@ -47,21 +45,32 @@ export function isCloudBaseUrl(baseUrl: string | undefined): boolean {
   }
 }
 
+/**
+ * Did this fail because the record already exists? Bitbucket signals it two
+ * ways: pipeline variables answer 409, branch restrictions answer 400 with the
+ * clash in prose. Both must count so a create can fall back to updating.
+ */
+export function isConflictError(error: any): boolean {
+  const status = error?.status ?? error?.originalError?.response?.status ?? error?.response?.status;
+  if (status === 409) return true;
+  const text = String(error?.message ?? '') + ' ' +
+    String(error?.originalError?.response?.data?.error?.message ?? '');
+  return /already exists|conflict/i.test(text);
+}
+
 export const CLOUD_MAX_PAGELEN = 100;
 
 /**
- * The PR *list* endpoint caps lower than the rest — measured on
- * /repositories/{ws}/{repo}/pullrequests: 50 -> 200, 51 -> 400 "Invalid
- * pagelen". The ceiling is per-endpoint on Cloud, so it cannot be assumed
- * uniform; pass the right one to clampPageSize.
+ * The PR list endpoint caps lower than the rest: 50 works, 51 fails. Cloud's
+ * ceiling is per-endpoint, so pass the right one to clampPageSize.
  */
 export const CLOUD_MAX_PAGELEN_PR_LIST = 50;
 
 /**
- * Build a Cloud `q` name filter. Cloud has no `name` query parameter — the
- * filtering language goes through `q`, as `name ~ "substring"`. The value is
- * quoted, so a `"` or `\` inside it would otherwise terminate the expression
- * early and produce a malformed query rather than a filtered result.
+ * Build a Cloud `q` name filter. Cloud has no `name` query parameter. Filtering
+ * goes through `q`, as `name ~ "substring"`. The value is quoted, so a `"` or
+ * `\` inside it would end the expression early and malform the query instead of
+ * filtering.
  */
 export function cloudNameFilter(name: string): string {
   return `name ~ "${name.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
@@ -83,14 +92,10 @@ export class BitbucketApiClient {
 
   constructor(private readonly config: BitbucketMcpConfig) {
     const { auth, http, rateLimit, snapshot } = config;
-    // Dialect comes from the BASE URL, not from which credential field is
-    // populated. It used to be `!!auth.token`, which welded two unrelated
-    // things together: an ambient BITBUCKET_TOKEN silently switched the API
-    // dialect to Server/DC against Cloud (every request 404ing while auth
-    // looked fine), and Cloud could never be driven with a Bearer credential
-    // at all — which repository and workspace access tokens require, since
-    // they reject Basic outright.
-    this.isServer = !isCloudBaseUrl(auth.baseUrl);
+    // An explicit BITBUCKET_DIALECT wins. Otherwise the base URL decides, not
+    // which credential field is populated: Cloud accepts both Basic and bearer,
+    // and repository access tokens are bearer-only.
+    this.isServer = auth.dialect ? auth.dialect === 'server' : !isCloudBaseUrl(auth.baseUrl);
     this.bucket = new TokenBucket(rateLimit.ratePerSec, rateLimit.burst);
     this.semaphore = new Semaphore(rateLimit.maxConcurrent);
     this.archiveSemaphore = new Semaphore(rateLimit.maxConcurrentArchives);
@@ -112,17 +117,15 @@ export class BitbucketApiClient {
   }
 
   /**
-   * Clamp a caller-supplied page size to what the target actually accepts.
-   * Cloud rejects anything above its ceiling with 400 "Invalid pagelen", and
-   * that ceiling is per-endpoint (100 on most, 50 on the PR list) — pass
-   * `cloudMax` when it is not the usual 100. Server/DC has no such ceiling,
-   * so its limits pass through untouched.
+   * Clamp a caller's page size to what the target accepts. Cloud's ceiling is
+   * per-endpoint, 100 on most and 50 on the PR list, so pass `cloudMax` when it
+   * is not 100. Server/DC has no ceiling and passes through.
    *
-   * This deliberately clamps the LIMIT rather than the wire `pagelen`.
-   * Clamping only the wire value would leave has_more/next_start computed from
-   * the caller's original number, so a limit=200 request would return 100 rows
-   * while next_start advanced by 200 — silently skipping the 100 in between.
-   * A short page is fine; a page that lies about where it ended is not.
+   * This clamps the limit, not the wire `pagelen`. Clamping the wire value alone
+   * leaves has_more and next_start computed from the caller's number, so
+   * limit=200 returns 100 rows while next_start advances by 200, skipping the
+   * 100 between. A short page is fine. A page that lies about where it ended is
+   * not.
    */
   clampPageSize(limit: number, cloudMax: number = CLOUD_MAX_PAGELEN): number {
     return this.isServer ? limit : Math.min(limit, cloudMax);

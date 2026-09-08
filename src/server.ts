@@ -14,6 +14,7 @@ import { SearchHandlers } from './handlers/search-handlers.js';
 import { GrepHandlers } from './handlers/grep-handlers.js';
 import { ProjectHandlers } from './handlers/project-handlers.js';
 import { AttachmentHandlers } from './handlers/attachment-handlers.js';
+import { ManagementHandlers } from './handlers/management-handlers.js';
 
 export const SERVER_VERSION = '3.0.0';
 
@@ -39,8 +40,9 @@ export class BitbucketMcpServer {
     const grep = new GrepHandlers(this.apiClient, snapshots);
     const projects = new ProjectHandlers(this.apiClient);
     const attachments = new AttachmentHandlers(this.apiClient);
+    const management = new ManagementHandlers(this.apiClient, config);
 
-    this.registry = new ToolRegistry(this.apiClient.getIsServer(), config.toolGroups);
+    this.registry = new ToolRegistry(this.apiClient.getIsServer(), config.toolGroups, config.management);
     const handlers: Record<string, (args: any) => Promise<any>> = {
       get_pull_request: a => pullRequests.handleGetPullRequest(a),
       list_pull_requests: a => pullRequests.handleListPullRequests(a),
@@ -67,6 +69,30 @@ export class BitbucketMcpServer {
       manage_attachments: a => attachments.handleManageAttachments(a),
       list_projects: a => projects.handleListProjects(a),
       list_repositories: a => projects.handleListRepositories(a),
+      // ── repository management (opt-in, Cloud only) ──
+      get_repository_settings: a => management.handleGetRepositorySettings(a),
+      update_repository_settings: a => management.handleUpdateRepositorySettings(a),
+      list_branch_restrictions: a => management.handleListBranchRestrictions(a),
+      manage_branch_restriction: a => management.handleManageBranchRestriction(a),
+      get_branching_model: a => management.handleGetBranchingModel(a),
+      manage_branching_model: a => management.handleManageBranchingModel(a),
+      list_default_reviewers: a => management.handleListDefaultReviewers(a),
+      manage_default_reviewer: a => management.handleManageDefaultReviewer(a),
+      list_repository_permissions: a => management.handleListRepositoryPermissions(a),
+      manage_repository_permission: a => management.handleManageRepositoryPermission(a),
+      get_pipelines_config: a => management.handleGetPipelinesConfig(a),
+      manage_pipelines_config: a => management.handleManagePipelinesConfig(a),
+      list_pipeline_variables: a => management.handleListPipelineVariables(a),
+      manage_pipeline_variable: a => management.handleManagePipelineVariable(a),
+      manage_pipeline_run: a => management.handleManagePipelineRun(a),
+      list_webhooks: a => management.handleListWebhooks(a),
+      manage_webhook: a => management.handleManageWebhook(a),
+      list_deploy_keys: a => management.handleListDeployKeys(a),
+      manage_deploy_key: a => management.handleManageDeployKey(a),
+      list_environments: a => management.handleListEnvironments(a),
+      manage_environment: a => management.handleManageEnvironment(a),
+      create_repository: a => management.handleCreateRepository(a),
+      delete_repository: a => management.handleDeleteRepository(a),
     };
 
     for (const definition of toolDefinitions) {

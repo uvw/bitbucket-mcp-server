@@ -9,6 +9,11 @@ export type ConfigAuth = {
   appPassword?: string;
   /** Bitbucket Server / Data Center bearer token. */
   token?: string;
+  /**
+   * Force the API dialect instead of deriving it from baseUrl. Unset derives it:
+   * api.bitbucket.org is Cloud, anything else is Server/DC.
+   */
+  dialect?: 'cloud' | 'server';
 };
 
 export type ConfigHttp = {
@@ -181,4 +186,19 @@ export type BitbucketMcpConfig = {
   output: ConfigOutput;
   /** Validated tool-group filter (BITBUCKET_TOOL_GROUPS); null = all groups. */
   toolGroups: string[] | null;
+  management: ConfigManagement;
+};
+
+export type ConfigManagement = {
+  /**
+   * Whether the repository-management tools are exposed at all. False by
+   * default. An unset BITBUCKET_TOOL_GROUPS means every group, so a new group
+   * would otherwise appear in every session.
+   */
+  enabled: boolean;
+  /**
+   * Whether the mutating management tools are exposed. Independent of `enabled`
+   * so the read side can audit a fleet while writes stay impossible.
+   */
+  allowWrite: boolean;
 };

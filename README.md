@@ -21,7 +21,7 @@ Supports **Bitbucket Server / Data Center** (primary target) and Bitbucket Cloud
 
 Measured on a live Data Center instance: a repeated content search went from **519 API calls / ~7s** (finding 1 of 8 real matches under burst throttling) to **0 API calls / 24ms** finding all 8. Full design and verified API research: [`REVAMP_PLAN.md`](REVAMP_PLAN.md).
 
-## Tools (25)
+## Tools (48)
 
 ### Search (`search`) — Server/DC only
 - **`grep`** — search file contents with **full regex, any branch**, like ripgrep on a local clone. One `archive` download per repo+commit, streamed in constant memory, cached in-process, freshness-checked every call (responses carry `as_of <commit>`). Omit `query` for filename-only glob listing. Modes: `content`, `files`, `count`; `glob`, `path`, `context`, `case_insensitive`, `max_results`.
@@ -54,6 +54,41 @@ Measured on a live Data Center instance: a repeated content search went from **5
 
 ### Attachments (`attachments`, Server) / Discovery (`discovery`)
 - **`manage_attachments`** (`download` capped, `delete`), **`list_projects`**, **`list_repositories`**.
+
+### Repository management (`management`) — Cloud only, opt-in
+
+Off by default. `BITBUCKET_MANAGEMENT=true` exposes the reads; mutations need
+`BITBUCKET_MANAGEMENT_WRITE=true` as well. Every mutating tool takes `dry_run`,
+which reports the request that would be sent plus the current value and sends
+nothing.
+
+Most of these exist at **repository or project** scope — pass `project_key`
+instead of `repository` to align a whole project in one call. A repository with
+its own explicit setting is not retroactively changed by a project default.
+
+- **`get_repository_settings`** / **`update_repository_settings`** — privacy, fork policy, main branch, project move, wiki/issues, rename. Renaming changes the **slug**, so clone URLs change with it.
+- **`list_branch_restrictions`** / **`manage_branch_restriction`** — all 18 restriction kinds, `glob` or `branching_model` matching, user/group exemptions. `set` is idempotent by kind+pattern: it updates the existing record instead of stacking a second one.
+- **`get_branching_model`** / **`manage_branching_model`** — development/production branches and branch-type prefixes; repo or project scope.
+- **`list_default_reviewers`** / **`manage_default_reviewer`** — repo or project scope. The user is a UUID in braces or an account id, not a bare username.
+- **`list_repository_permissions`** / **`manage_repository_permission`** — user *or* group (exactly one), repo or project scope.
+- **`get_pipelines_config`** / **`manage_pipelines_config`** — the Pipelines on/off switch, plus schedules.
+- **`list_pipeline_variables`** / **`manage_pipeline_variable`** — repository, workspace, or deployment-environment scope; idempotent by key. Secured values are never returned, so the `secured` flag is what distinguishes hidden from empty.
+- **`manage_pipeline_run`** — trigger a pipeline on a ref (optional custom selector and variables) or stop a running one.
+- **`list_webhooks`** / **`manage_webhook`** — repo or workspace scope.
+- **`list_deploy_keys`** / **`manage_deploy_key`**, **`list_environments`** / **`manage_environment`**.
+- **`create_repository`**, **`delete_repository`** — deletion is irreversible and requires `confirm_full_name` to equal `workspace/repository` exactly.
+
+Scopes are the usual blocker, not permissions. Bitbucket returns the scope it
+wanted in `error.detail.required`, and these tools surface that array verbatim:
+
+| Capability | Token scope |
+|---|---|
+| Branch restrictions, branching-model settings, Pipelines on/off, repo settings, default reviewers, deploy keys, `create_repository` | `admin:repository` |
+| Pipeline variables, environments | `admin:pipeline` |
+| Project-scope settings | `admin:project` |
+| Repository permissions | `admin:repository` + `write:permission` |
+| `delete_repository` | `delete:repository` |
+| Deleting a webhook (creating one only needs `write:webhook`) | `delete:webhook` |
 
 ## Output conventions
 
@@ -110,6 +145,22 @@ Every numeric policy is environment-tunable — nothing is hard-coded. The full 
 | `BITBUCKET_STREAM_ABORT_MB` | `2048` | Abort archive scans past this many extracted MB (falls back to bounded per-file scan) |
 | `BITBUCKET_HTTP_TIMEOUT_MS` | `30000` | Per-request timeout |
 | `BITBUCKET_TOOL_GROUPS` | all | Comma-separated groups to expose (validated, enforced at dispatch, fails closed) |
+| `BITBUCKET_DIALECT` | from base URL | Force `cloud` or `server`. Unset derives it from the base URL — `api.bitbucket.org` is Cloud, anything else is Server/DC |
+| `BITBUCKET_MANAGEMENT` | `false` | Expose the repository-management tools at all |
+| `BITBUCKET_MANAGEMENT_WRITE` | `false` | Allow the **mutating** management tools. Needs `BITBUCKET_MANAGEMENT` too |
+
+### Authentication and dialect
+
+Auth scheme and API dialect are independent. Basic auth uses
+`BITBUCKET_USERNAME` + `BITBUCKET_APP_PASSWORD` (on Cloud, that is your email
+plus an API token). `BITBUCKET_TOKEN` sends a bearer token instead and needs no
+username — which is the only way to use a Bitbucket Cloud **repository** or
+**workspace access token**, since those reject Basic auth outright.
+
+The dialect comes from the base URL, not from which credential you supplied, so
+a bearer token against Cloud stays on the Cloud API. Override with
+`BITBUCKET_DIALECT` if you front the API with something whose hostname does not
+give it away.
 
 ### The grep engine's guarantees
 
