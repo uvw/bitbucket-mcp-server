@@ -18,7 +18,7 @@
     "build": "rm -rf build && tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
     "dev": "tsc --watch",
     "start": "node build/index.js",
-    "test": "npm run build && node --test build/tests/",
+    "test": "npm run build && node --test build/tests/*.js",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
