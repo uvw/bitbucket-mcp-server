@@ -3,7 +3,7 @@ import { BitbucketApiClient } from '../core/api-client.js';
 import { encodeRepoPath, encodeSegment } from '../core/paths.js';
 import { isGetPullRequestDiffArgs, isSetReviewStatusArgs } from '../tools/guards.js';
 import { DiffParser } from '../formatting/diff-parser.js';
-import { textContent } from '../formatting/respond.js';
+import { errorContent, textContent } from '../formatting/respond.js';
 import type { ToolResponse } from '../types/index.js';
 
 // Review tools.
@@ -104,6 +104,14 @@ export class ReviewHandlers {
     const { workspace, repository, pull_request_id, status, comment } = args;
 
     try {
+      // Server addresses the reviewer by username in the URL. Bearer auth does
+      // not require BITBUCKET_USERNAME, so say what is missing rather than
+      // building a request against an empty path segment.
+      if (this.apiClient.getIsServer() && !this.username) {
+        return errorContent(
+          'set_review_status needs BITBUCKET_USERNAME on Server/DC — the reviewer is addressed by username in the request path.'
+        );
+      }
       const username = this.username.replace(/[@+]/g, '_');
       const w = encodeSegment(workspace, 'workspace');
       const r = encodeSegment(repository, 'repository');
