@@ -794,6 +794,16 @@ export class PullRequestHandlers {
       code_snippet, search_context, match_strategy = 'strict', severity, attachments,
     } = args;
 
+    // code_snippet can only be resolved within a known file's diff. Without
+    // file_path the block is skipped, the comment is created with no anchor, and
+    // the call reports success: you asked to annotate a line and got a
+    // PR-level comment instead.
+    if (code_snippet && !line_number && !file_path) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'code_snippet needs file_path to resolve against that file\'s diff. Pass file_path, or pass line_number directly.'
+      );
+    }
     if (code_snippet && !line_number && file_path) {
       const resolved = await this.resolveLineFromCode(
         workspace, repository, pull_request_id, file_path, code_snippet, search_context, match_strategy
@@ -1066,17 +1076,30 @@ export class PullRequestHandlers {
       if (matches.length === 0) {
         throw new McpError(ErrorCode.InvalidParams, `Code snippet not found in ${filePath}`);
       }
-      if (matches.length === 1 || matchStrategy === 'best') {
-        const best = matches.sort((a, b) => b.confidence - a.confidence)[0];
+
+      // search_context is what the ambiguity error below tells callers to add,
+      // so it has to actually narrow the field. It only ever fed the confidence
+      // score while the ambiguity check counted raw matches, which meant taking
+      // the error's advice changed nothing. Keep the best-scoring candidates and
+      // accept a unique winner; anything still tied stays ambiguous.
+      let candidates = matches;
+      if (searchContext && candidates.length > 1) {
+        const top = Math.max(...candidates.map(m => m.confidence));
+        const leaders = candidates.filter(m => Math.abs(m.confidence - top) < 1e-9);
+        if (leaders.length === 1) candidates = leaders;
+      }
+
+      if (candidates.length === 1 || matchStrategy === 'best') {
+        const best = candidates.sort((a, b) => b.confidence - a.confidence)[0];
         return { line_number: best.line_number, line_type: best.line_type };
       }
 
-      const listed = matches.slice(0, this.cfg.output.snippetMatchListMax);
+      const listed = candidates.slice(0, this.cfg.output.snippetMatchListMax);
       throw new McpError(
         ErrorCode.InvalidParams,
-        `Code snippet matches ${matches.length} locations in ${filePath}: ` +
+        `Code snippet matches ${candidates.length} locations in ${filePath}: ` +
           listed.map(m => `line ${m.line_number} (${m.line_type})`).join(', ') +
-          (matches.length > listed.length ? ` …and ${matches.length - listed.length} more.` : '') +
+          (candidates.length > listed.length ? ` …and ${candidates.length - listed.length} more.` : '') +
           ` Add search_context, use match_strategy:"best", or pass line_number directly.`
       );
     } catch (error) {
