@@ -367,7 +367,7 @@ export const toolDefinitions: ToolDefinition[] = [
         workspace: W,
         repository: R,
         branch_name: { type: 'string' },
-        expected_head: { type: 'string', description: 'Known head SHA (compare-and-swap)' },
+        expected_head: { type: 'string', description: 'Refuse the delete unless the head matches this SHA (abbreviations allowed). Atomic compare-and-swap on Server; checked immediately before deleting on Cloud.' },
       },
       required: ['workspace', 'repository', 'branch_name'],
     },
