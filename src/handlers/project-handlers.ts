@@ -1,5 +1,5 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { BitbucketApiClient } from '../core/api-client.js';
+import { BitbucketApiClient, CLOUD_MAX_PAGELEN } from '../core/api-client.js';
 import { isListProjectsArgs, isListRepositoriesArgs } from '../tools/guards.js';
 import { compactObject, errorContent, jsonContent, serverPage } from '../formatting/respond.js';
 import type { ToolResponse } from '../types/index.js';
@@ -17,7 +17,7 @@ export class ProjectHandlers {
     if (!isListProjectsArgs(args)) {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for list_projects');
     }
-    const { name, permission } = args;
+    const { workspace, name, permission } = args;
     const limit = args.limit ?? this.cfg.pagination.defaultListLimit;
     const start = args.start ?? 0;
 
@@ -38,10 +38,22 @@ export class ProjectHandlers {
         );
       }
 
-      const response = await this.apiClient.makeRequest<any>('get', '/workspaces', undefined, {
-        params: { pagelen: limit, page: Math.floor(start / limit) + 1 },
+      // Cloud keeps projects under a workspace, so listing the CORE/URM/DEPL
+      // keys that repositories carry needs one: /workspaces/{ws}/projects.
+      // Without a workspace this falls back to listing the workspaces
+      // themselves, which an API
+      // token without workspace scope answers 404 for, so prefer passing one.
+      const apiPath = workspace ? `/workspaces/${workspace}/projects` : '/workspaces';
+      const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
+        params: { pagelen: Math.min(limit, CLOUD_MAX_PAGELEN), page: Math.floor(start / limit) + 1 },
       });
-      const projects = (response.values || []).map((w: any) => compactObject({ key: w.slug, name: w.name }));
+      const projects = (response.values || []).map((v: any) =>
+        compactObject({
+          key: workspace ? v.key : v.slug,
+          name: v.name,
+          description: workspace ? v.description || undefined : undefined,
+        })
+      );
       return jsonContent(
         compactObject({
           projects,
