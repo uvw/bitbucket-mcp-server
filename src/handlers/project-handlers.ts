@@ -1,5 +1,5 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { BitbucketApiClient } from '../core/api-client.js';
+import { BitbucketApiClient, cloudNameFilter } from '../core/api-client.js';
 import { isListProjectsArgs, isListRepositoriesArgs } from '../tools/guards.js';
 import { compactObject, errorContent, jsonContent, serverPage } from '../formatting/respond.js';
 import type { ToolResponse } from '../types/index.js';
@@ -44,8 +44,15 @@ export class ProjectHandlers {
       // themselves, which is all this branch did before — and which an API
       // token without workspace scope answers 404 for, so prefer passing one.
       const apiPath = workspace ? `/workspaces/${workspace}/projects` : '/workspaces';
+      // `name` has to go through Cloud's `q` language; there is no name param.
+      // `permission` is a Server concept with Server-shaped values, so it is
+      // reported as ignored rather than silently dropped.
       const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
-        params: { pagelen: limit, page: Math.floor(start / limit) + 1 },
+        params: {
+          pagelen: limit,
+          page: Math.floor(start / limit) + 1,
+          ...(name ? { q: cloudNameFilter(name) } : {}),
+        },
       });
       const projects = (response.values || []).map((v: any) =>
         compactObject({
@@ -59,6 +66,7 @@ export class ProjectHandlers {
           projects,
           has_more: !!response.next || undefined,
           next_start: response.next ? start + limit : undefined,
+          note: permission ? 'permission filter ignored — Server/DC only' : undefined,
         })
       );
     } catch (error) {
@@ -102,7 +110,11 @@ export class ProjectHandlers {
         return errorContent('Bitbucket Cloud requires a workspace parameter to list repositories.');
       }
       const response = await this.apiClient.makeRequest<any>('get', `/repositories/${workspace}`, undefined, {
-        params: { pagelen: limit, page: Math.floor(start / limit) + 1 },
+        params: {
+          pagelen: limit,
+          page: Math.floor(start / limit) + 1,
+          ...(name ? { q: cloudNameFilter(name) } : {}),
+        },
       });
       const repositories = (response.values || []).map((r: any) =>
         compactObject({
@@ -117,6 +129,7 @@ export class ProjectHandlers {
           repositories,
           has_more: !!response.next || undefined,
           next_start: response.next ? start + limit : undefined,
+          note: permission ? 'permission filter ignored — Server/DC only' : undefined,
         })
       );
     } catch (error) {

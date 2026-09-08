@@ -40,6 +40,16 @@ export const CLOUD_MAX_PAGELEN = 100;
  */
 export const CLOUD_MAX_PAGELEN_PR_LIST = 50;
 
+/**
+ * Build a Cloud `q` name filter. Cloud has no `name` query parameter — the
+ * filtering language goes through `q`, as `name ~ "substring"`. The value is
+ * quoted, so a `"` or `\` inside it would otherwise terminate the expression
+ * early and produce a malformed query rather than a filtered result.
+ */
+export function cloudNameFilter(name: string): string {
+  return `name ~ "${name.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
 /** Percent-encode a repo file path per segment (spaces, %, #, ? in filenames). */
 export function encodeRepoPath(path: string): string {
   return path.split('/').map(encodeURIComponent).join('/');

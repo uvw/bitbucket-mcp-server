@@ -1,5 +1,5 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { BitbucketApiClient, encodeRepoPath } from '../core/api-client.js';
+import { cloudNameFilter, BitbucketApiClient, encodeRepoPath } from '../core/api-client.js';
 import {
   isListBranchesArgs,
   isDeleteBranchArgs,
@@ -70,7 +70,7 @@ export class BranchHandlers {
           'get',
           `/repositories/${workspace}/${repository}/refs/branches`,
           undefined,
-          { params: { pagelen: limit, page: Math.floor(start / limit) + 1, ...(filter ? { q: `name ~ "${filter}"` } : {}) } }
+          { params: { pagelen: limit, page: Math.floor(start / limit) + 1, ...(filter ? { q: cloudNameFilter(filter) } : {}) } }
         );
         branches = (response.values || []).map((b: any) =>
           compactObject({ name: b.name, latest_commit: b.target?.hash?.slice(0, 12) })
