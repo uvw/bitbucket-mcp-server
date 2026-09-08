@@ -19,7 +19,7 @@
     "prepare": "npm run build",
     "dev": "tsc --watch",
     "start": "node build/index.js",
-    "test": "npm run build && node --test build/tests/",
+    "test": "npm run build && node --test build/tests/*.js",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
