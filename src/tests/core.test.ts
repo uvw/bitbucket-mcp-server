@@ -7,6 +7,7 @@ import { buildQueryFromClauses, quoteIfNeeded } from '../core/query-budget.js';
 import { LineScanner } from '../core/snapshot.js';
 import { truncateMarked, compactObject, isoDate, isCommitRev, toEpochMillis, serverPage } from '../formatting/respond.js';
 import { isPosInt, optNonNegInt } from '../tools/guards.js';
+import { isCloudBaseUrl, cloudNameFilter, CLOUD_MAX_PAGELEN, CLOUD_MAX_PAGELEN_PR_LIST } from '../core/api-client.js';
 
 // ── throttle ─────────────────────────────────────────────────────────────────
 
@@ -227,4 +228,37 @@ test('truncateMarked marks, compactObject drops empties, isoDate normalizes', ()
   assert.deepEqual(compactObject({ a: 1, b: undefined, c: null, d: '' }), { a: 1 });
   assert.equal(isoDate(0), '1970-01-01T00:00:00.000Z');
   assert.equal(isoDate('not-a-date'), undefined);
+});
+
+// ── cloud vs server dialect ──────────────────────────────────────────────────
+
+test('isCloudBaseUrl: dialect follows the URL, not the credential', () => {
+  // Default (unset) is the Cloud API root.
+  assert.equal(isCloudBaseUrl(undefined), true);
+  assert.equal(isCloudBaseUrl(''), true);
+  assert.equal(isCloudBaseUrl('https://api.bitbucket.org/2.0'), true);
+  assert.equal(isCloudBaseUrl('https://api.bitbucket.org'), true);
+  // Case and trailing path must not matter.
+  assert.equal(isCloudBaseUrl('https://API.BITBUCKET.ORG/2.0/'), true);
+  // Server/DC instances, including anything else under bitbucket.org.
+  assert.equal(isCloudBaseUrl('https://bitbucket.mycorp.example.com'), false);
+  assert.equal(isCloudBaseUrl('https://bitbucket.org'), false);
+  assert.equal(isCloudBaseUrl('https://api.bitbucket.org.evil.example.com'), false);
+  // Unparseable means a hand-configured Server host, not Cloud.
+  assert.equal(isCloudBaseUrl('not a url'), false);
+});
+
+test('cloudNameFilter: builds a q clause and escapes the value', () => {
+  assert.equal(cloudNameFilter('widget'), 'name ~ "widget"');
+  // A quote would otherwise close the expression early.
+  assert.equal(cloudNameFilter('say "hi"'), 'name ~ "say \\"hi\\""');
+  // Backslashes escape first, so the quote escape cannot be neutralised.
+  assert.equal(cloudNameFilter('back\\slash'), 'name ~ "back\\\\slash"');
+  assert.equal(cloudNameFilter(''), 'name ~ ""');
+});
+
+test('cloud pagelen ceilings: PR list is lower than the rest', () => {
+  assert.equal(CLOUD_MAX_PAGELEN, 100);
+  assert.equal(CLOUD_MAX_PAGELEN_PR_LIST, 50);
+  assert.ok(CLOUD_MAX_PAGELEN_PR_LIST < CLOUD_MAX_PAGELEN);
 });

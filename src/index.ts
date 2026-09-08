@@ -7,9 +7,14 @@ import { BitbucketMcpServer } from './server.js';
 
 const config = loadConfig();
 
-if (!config.auth.username || (!config.auth.appPassword && !config.auth.token)) {
+// Bearer credentials carry their own identity, so a username is only required
+// for Basic auth. Demanding one unconditionally made Bitbucket Cloud repository
+// and workspace access tokens — which are bearer-only — impossible to use.
+if (!config.auth.token && (!config.auth.username || !config.auth.appPassword)) {
   console.error(
-    'Error: BITBUCKET_USERNAME and either BITBUCKET_APP_PASSWORD (Cloud) or BITBUCKET_TOKEN (Server/DC) are required.'
+    'Error: Basic auth needs BITBUCKET_USERNAME and BITBUCKET_APP_PASSWORD. ' +
+      'Alternatively set BITBUCKET_TOKEN for bearer auth — a Server/DC personal access token, ' +
+      'or a Bitbucket Cloud repository/workspace access token.'
   );
   process.exit(1);
 }

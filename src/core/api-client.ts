@@ -30,6 +30,23 @@ type HttpMethod = 'get' | 'post' | 'put' | 'delete';
  * 101 -> 400 on /src, /commits and /refs/branches. Server/DC has no such cap,
  * so Server-sized page sizes must be clamped before reaching a Cloud request.
  */
+/**
+ * Is this base URL Bitbucket Cloud? Cloud lives at exactly one API host, so
+ * anything else is a Server/Data Centre instance. Deriving the dialect from
+ * the URL keeps it independent of the credential type: Cloud accepts Basic
+ * (email + API token) *and* Bearer (repository/workspace access tokens), while
+ * Server/DC uses Bearer personal access tokens — the scheme says nothing about
+ * which API shape to speak.
+ */
+export function isCloudBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return true; // default baseUrl is the Cloud API root
+  try {
+    return new URL(baseUrl).hostname.toLowerCase() === 'api.bitbucket.org';
+  } catch {
+    return false; // unparseable means a hand-configured Server host
+  }
+}
+
 export const CLOUD_MAX_PAGELEN = 100;
 
 /**
@@ -66,7 +83,14 @@ export class BitbucketApiClient {
 
   constructor(private readonly config: BitbucketMcpConfig) {
     const { auth, http, rateLimit, snapshot } = config;
-    this.isServer = !!auth.token;
+    // Dialect comes from the BASE URL, not from which credential field is
+    // populated. It used to be `!!auth.token`, which welded two unrelated
+    // things together: an ambient BITBUCKET_TOKEN silently switched the API
+    // dialect to Server/DC against Cloud (every request 404ing while auth
+    // looked fine), and Cloud could never be driven with a Bearer credential
+    // at all — which repository and workspace access tokens require, since
+    // they reject Basic outright.
+    this.isServer = !isCloudBaseUrl(auth.baseUrl);
     this.bucket = new TokenBucket(rateLimit.ratePerSec, rateLimit.burst);
     this.semaphore = new Semaphore(rateLimit.maxConcurrent);
     this.archiveSemaphore = new Semaphore(rateLimit.maxConcurrentArchives);
