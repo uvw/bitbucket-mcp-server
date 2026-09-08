@@ -754,8 +754,11 @@ export class PullRequestHandlers {
           typeof args.version === 'number'
         );
       } else {
-        // Cloud decline takes no version — no read needed.
-        await this.apiClient.makeRequest('post', `${this.cloudPrPath(workspace, repository, pull_request_id)}/decline`);
+        // Cloud decline takes no version — no read needed. It does, however,
+        // insist on a body: a POST with none answers 400. An empty object is
+        // enough, and is what makes axios send a Content-Type/Content-Length
+        // at all.
+        await this.apiClient.makeRequest('post', `${this.cloudPrPath(workspace, repository, pull_request_id)}/decline`, {});
       }
 
       let commentNote = '';
