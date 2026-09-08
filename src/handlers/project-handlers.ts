@@ -1,5 +1,5 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { BitbucketApiClient, CLOUD_MAX_PAGELEN } from '../core/api-client.js';
+import { BitbucketApiClient } from '../core/api-client.js';
 import { isListProjectsArgs, isListRepositoriesArgs } from '../tools/guards.js';
 import { compactObject, errorContent, jsonContent, serverPage } from '../formatting/respond.js';
 import type { ToolResponse } from '../types/index.js';
@@ -18,7 +18,7 @@ export class ProjectHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for list_projects');
     }
     const { workspace, name, permission } = args;
-    const limit = args.limit ?? this.cfg.pagination.defaultListLimit;
+    const limit = this.apiClient.clampPageSize(args.limit ?? this.cfg.pagination.defaultListLimit);
     const start = args.start ?? 0;
 
     try {
@@ -45,7 +45,7 @@ export class ProjectHandlers {
       // token without workspace scope answers 404 for, so prefer passing one.
       const apiPath = workspace ? `/workspaces/${workspace}/projects` : '/workspaces';
       const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
-        params: { pagelen: Math.min(limit, CLOUD_MAX_PAGELEN), page: Math.floor(start / limit) + 1 },
+        params: { pagelen: limit, page: Math.floor(start / limit) + 1 },
       });
       const projects = (response.values || []).map((v: any) =>
         compactObject({
@@ -71,7 +71,7 @@ export class ProjectHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for list_repositories');
     }
     const { workspace, name, permission } = args;
-    const limit = args.limit ?? this.cfg.pagination.defaultListLimit;
+    const limit = this.apiClient.clampPageSize(args.limit ?? this.cfg.pagination.defaultListLimit);
     const start = args.start ?? 0;
 
     try {
