@@ -519,12 +519,13 @@ export const toolDefinitions: ToolDefinition[] = [
   // ── Discovery ──────────────────────────────────────────────────────────────
   {
     name: 'list_projects',
-    description: 'List accessible projects/workspaces.',
+    description: 'List projects. On Cloud pass `workspace` to list its projects (the keys repositories carry); omitting it lists workspaces instead. On Server lists accessible projects.',
     group: 'discovery',
     availability: 'both',
     inputSchema: {
       type: 'object',
       properties: {
+        workspace: { type: 'string', description: 'Workspace slug — list projects inside it (Cloud)' },
         name: { type: 'string', description: 'Name filter' },
         permission: { type: 'string', description: 'e.g. PROJECT_READ' },
         limit: LIMIT,

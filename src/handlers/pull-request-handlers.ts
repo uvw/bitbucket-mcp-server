@@ -1,6 +1,6 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { existsSync } from 'fs';
-import { BitbucketApiClient, encodeRepoPath } from '../core/api-client.js';
+import { BitbucketApiClient, CLOUD_MAX_PAGELEN, encodeRepoPath } from '../core/api-client.js';
 import {
   formatServerPullRequest,
   formatCloudPullRequest,
@@ -970,14 +970,30 @@ export class PullRequestHandlers {
         commits = (response.values || []).map(formatServerCommit);
         ({ hasMore, nextStart } = serverPage(response));
       } else {
-        const response = await this.apiClient.makeRequest<any>(
-          'get',
-          `${this.cloudPrPath(workspace, repository, pull_request_id)}/commits`,
-          undefined,
-          { params: { pagelen: limit, page: Math.floor(start / limit) + 1 } }
-        );
-        commits = (response.values || []).map(formatCloudCommit);
-        hasMore = !!response.next;
+        // Cloud rejects `page` outright on this endpoint — `?pagelen=25&page=1`
+        // answers 400 "Invalid page" while `?pagelen=25` answers 200 — so it
+        // has to be walked by following `next` and slicing the window out.
+        // start=0, the only offset a first call ever uses, costs one request.
+        // pagelen is capped at Cloud's hard maximum of 100.
+        let url: string | null = `${this.cloudPrPath(workspace, repository, pull_request_id)}/commits`;
+        let reqParams: any | undefined = { pagelen: Math.min(limit, CLOUD_MAX_PAGELEN) };
+        const collected: any[] = [];
+        for (let page = 0; page < this.cfg.pagination.commitsFilterMaxPages && url; page++) {
+          const response: any = await this.apiClient.makeRequest<any>(
+            'get',
+            url,
+            undefined,
+            reqParams ? { params: reqParams } : undefined
+          );
+          collected.push(...(response.values || []));
+          url = response.next || null; // absolute URL; axios overrides baseURL
+          reqParams = undefined;
+          if (collected.length >= start + limit) break;
+        }
+        commits = collected.slice(start, start + limit).map(formatCloudCommit);
+        // More exists if we over-fetched past the window, or pages remain
+        // (including the page-cap case, where url is still set).
+        hasMore = collected.length > start + limit || url !== null;
         nextStart = hasMore ? start + limit : undefined;
       }
 

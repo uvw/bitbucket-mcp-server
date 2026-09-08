@@ -24,6 +24,14 @@ import { InFlightCoalescer, TtlMemo } from './cache.js';
 
 type HttpMethod = 'get' | 'post' | 'put' | 'delete';
 
+/**
+ * Hard maximum Bitbucket Cloud accepts for `pagelen` on every paginated
+ * endpoint. Anything above it is a 400 "Invalid pagelen" — measured: 100 -> 200,
+ * 101 -> 400. Server/DC has no such cap, so Server-sized page sizes must be
+ * clamped before they reach a Cloud request.
+ */
+export const CLOUD_MAX_PAGELEN = 100;
+
 /** Percent-encode a repo file path per segment (spaces, %, #, ? in filenames). */
 export function encodeRepoPath(path: string): string {
   return path.split('/').map(encodeURIComponent).join('/');
