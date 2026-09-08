@@ -298,7 +298,7 @@ test('ToolRegistry: read-only hides AND refuses mutating tools; disabled tools a
   }
   await assert.rejects(ro.dispatch('merge_pull_request', {}), (e: unknown) => e instanceof McpError && e.code === ErrorCode.MethodNotFound);
   await assert.rejects(ro.dispatch('grep', {}), (e: unknown) => e instanceof McpError && e.code === ErrorCode.MethodNotFound);
-  const mutating = toolDefinitions.filter(d => d.mutates).map(d => d.name).sort();
+  const mutating = toolDefinitions.filter(d => d.mutates && d.group !== 'management').map(d => d.name).sort();
   assert.deepEqual(mutating, ['add_comment', 'create_pull_request', 'decline_pull_request', 'delete_branch', 'manage_comment', 'merge_pull_request', 'set_review_status', 'update_pull_request']);
 });
 

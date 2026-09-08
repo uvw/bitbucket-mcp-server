@@ -34,12 +34,10 @@ type HttpMethod = 'get' | 'post' | 'put' | 'delete';
  * so Server-sized page sizes must be clamped before reaching a Cloud request.
  */
 /**
- * Is this base URL Bitbucket Cloud? Cloud lives at exactly one API host, so
- * anything else is a Server/Data Centre instance. Deriving the dialect from
- * the URL keeps it independent of the credential type: Cloud accepts Basic
- * (email + API token) *and* Bearer (repository/workspace access tokens), while
- * Server/DC uses Bearer personal access tokens — the scheme says nothing about
- * which API shape to speak.
+ * Is this base URL Bitbucket Cloud? Cloud lives at one API host, so anything
+ * else is a Server/DC instance. Keeping the dialect on the URL leaves it
+ * independent of the credential. The auth scheme says nothing about which API
+ * shape to speak.
  */
 export function isCloudBaseUrl(baseUrl: string | undefined): boolean {
   if (!baseUrl) return true; // default baseUrl is the Cloud API root
@@ -48,6 +46,19 @@ export function isCloudBaseUrl(baseUrl: string | undefined): boolean {
   } catch {
     return false; // unparseable means a hand-configured Server host
   }
+}
+
+/**
+ * Did this fail because the record already exists? Bitbucket signals it two
+ * ways: pipeline variables answer 409, branch restrictions answer 400 with the
+ * clash in prose. Both must count so a create can fall back to updating.
+ */
+export function isConflictError(error: any): boolean {
+  const status = error?.status ?? error?.originalError?.response?.status ?? error?.response?.status;
+  if (status === 409) return true;
+  const text = String(error?.message ?? '') + ' ' +
+    String(error?.originalError?.response?.data?.error?.message ?? '');
+  return /already exists|conflict/i.test(text);
 }
 
 export const CLOUD_MAX_PAGELEN = 100;
@@ -81,14 +92,10 @@ export class BitbucketApiClient {
 
   constructor(private readonly config: BitbucketMcpConfig) {
     const { auth, http, rateLimit, snapshot } = config;
-    // Dialect comes from the BASE URL, not from which credential field is
-    // populated. It used to be `!!auth.token`, which welded two unrelated
-    // things together: an ambient BITBUCKET_TOKEN silently switched the API
-    // dialect to Server/DC against Cloud (every request 404ing while auth
-    // looked fine), and Cloud could never be driven with a Bearer credential
-    // at all — which repository and workspace access tokens require, since
-    // they reject Basic outright.
-    this.isServer = !isCloudBaseUrl(auth.baseUrl);
+    // An explicit BITBUCKET_DIALECT wins. Otherwise the base URL decides, not
+    // which credential field is populated: Cloud accepts both Basic and bearer,
+    // and repository access tokens are bearer-only.
+    this.isServer = auth.dialect ? auth.dialect === 'server' : !isCloudBaseUrl(auth.baseUrl);
     this.bucket = new TokenBucket(rateLimit.ratePerSec, rateLimit.burst);
     this.semaphore = new Semaphore(rateLimit.maxConcurrent);
     this.archiveSemaphore = new Semaphore(rateLimit.maxConcurrentArchives);

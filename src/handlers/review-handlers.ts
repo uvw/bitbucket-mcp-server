@@ -104,12 +104,12 @@ export class ReviewHandlers {
     const { workspace, repository, pull_request_id, status, comment } = args;
 
     try {
-      // Server addresses the reviewer by username in the URL. Bearer auth does
-      // not require BITBUCKET_USERNAME, so say what is missing rather than
+      // Server addresses the reviewer by username in the URL, and bearer auth
+      // does not require BITBUCKET_USERNAME. Say what is missing instead of
       // building a request against an empty path segment.
       if (this.apiClient.getIsServer() && !this.username) {
         return errorContent(
-          'set_review_status needs BITBUCKET_USERNAME on Server/DC — the reviewer is addressed by username in the request path.'
+          'set_review_status needs BITBUCKET_USERNAME on Server/DC. The reviewer is addressed by username in the request path.'
         );
       }
       const username = this.username.replace(/[@+]/g, '_');

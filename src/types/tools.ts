@@ -9,9 +9,10 @@ export type ToolGroup =
   | 'files'
   | 'search'
   | 'attachments'
-  | 'discovery';
+  | 'discovery'
+  | 'management';
 
-export type ToolAvailability = 'both' | 'server_only';
+export type ToolAvailability = 'both' | 'server_only' | 'cloud_only';
 
 export type ToolResponse = {
   content: Array<{ type: string; [key: string]: unknown }>;
