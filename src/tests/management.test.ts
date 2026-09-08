@@ -311,3 +311,25 @@ test("Bitbucket's error detail is surfaced, not flattened to Bad request", async
     /already complete with status PASSED/
   );
 });
+
+test('a branching model that cannot be read explains why', async () => {
+  // currentOrNull is deliberately lenient, so the total-failure path has to go
+  // back and surface the real error instead of "not readable".
+  const client: any = {
+    clampPageSize: (n: number) => n,
+    invalidateRef: () => {},
+    getIsServer: () => false,
+    makeRequest: async () => {
+      throw {
+        status: 403,
+        message: 'Forbidden',
+        originalError: { response: { status: 403, data: { error: { message: 'Forbidden', detail: { required: ['project:admin'] } } } } },
+      };
+    },
+  };
+  const h = new ManagementHandlers(client, { pagination: { defaultListLimit: 25 }, output: {} } as any);
+  await assert.rejects(
+    () => h.handleGetBranchingModel({ workspace: 'w', project_key: 'P' }),
+    /project:admin/
+  );
+});

@@ -349,7 +349,15 @@ export class ManagementHandlers {
       this.currentOrNull(`${base}/branching-model`),
       this.currentOrNull(`${base}/branching-model/settings`),
     ]);
-    if (!model && !settings) return errorContent(`No branching model readable for ${label}.`);
+    if (!model && !settings) {
+      // currentOrNull swallows everything so the partial reads below can degrade
+      // gracefully. When BOTH fail there is nothing to degrade to, and "not
+      // readable" hides the reason: a repository-scoped token cannot reach a
+      // project at all. Re-issue one read so the real error, usually the scope
+      // it wanted, reaches the caller.
+      await this.call<any>('get', `${base}/branching-model`);
+      return errorContent(`No branching model readable for ${label}.`);
+    }
     return jsonContent(
       compactObject({
         scope: label,
