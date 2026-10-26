@@ -119,7 +119,7 @@ Requires **Node.js 22 or newer** (18 and 20 are end-of-life and no longer receiv
 }
 ```
 
-For Bitbucket Cloud use `BITBUCKET_APP_PASSWORD` instead of `BITBUCKET_TOKEN` (and omit `BITBUCKET_BASE_URL`).
+For Bitbucket Cloud with an API token or app password, use `BITBUCKET_APP_PASSWORD` instead of `BITBUCKET_TOKEN` (and omit `BITBUCKET_BASE_URL`). Cloud access tokens use `BITBUCKET_TOKEN`; see [Authentication and dialect](#authentication-and-dialect).
 
 Credential walkthroughs: [Cloud app password](SETUP_GUIDE.md) · [Server/DC HTTP token](SETUP_GUIDE_SERVER.md).
 

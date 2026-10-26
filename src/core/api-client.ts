@@ -267,7 +267,7 @@ export class BitbucketApiClient {
       }
       if (status === 401) {
         return this.errorContent(
-          `Authentication failed. Please check your ${this.isServer ? 'BITBUCKET_TOKEN' : 'BITBUCKET_USERNAME and BITBUCKET_APP_PASSWORD'}${refSuffix}`
+          `Authentication failed. Please check your ${this.config.auth.token ? 'BITBUCKET_TOKEN' : 'BITBUCKET_USERNAME and BITBUCKET_APP_PASSWORD'}${refSuffix}`
         );
       }
       if (status === 403) {

@@ -220,9 +220,9 @@ export function loadConfig(env: Env = process.env): BitbucketMcpConfig {
  */
 export const CONFIG_REFERENCE: Array<{ env: string; def: string; description: string }> = [
   { env: 'BITBUCKET_BASE_URL', def: 'https://api.bitbucket.org/2.0', description: 'Bitbucket base URL (Server/DC root or Cloud API root)' },
-  { env: 'BITBUCKET_USERNAME', def: '(required)', description: 'Username the credentials belong to' },
+  { env: 'BITBUCKET_USERNAME', def: '—', description: 'Username for Basic auth (Cloud: your account email). Not used with BITBUCKET_TOKEN' },
   { env: 'BITBUCKET_APP_PASSWORD', def: '—', description: 'Bitbucket Cloud app password (basic auth)' },
-  { env: 'BITBUCKET_TOKEN', def: '—', description: 'Bitbucket Server/DC personal access token (bearer)' },
+  { env: 'BITBUCKET_TOKEN', def: '—', description: 'Bearer token: a Server/DC personal access token, or a Cloud repository/workspace access token' },
   { env: 'BITBUCKET_DIALECT', def: '(from base URL)', description: 'Force the API dialect: "cloud" or "server"' },
   { env: 'BITBUCKET_MANAGEMENT', def: 'false', description: 'Expose the repository-management tools' },
   { env: 'BITBUCKET_MANAGEMENT_WRITE', def: 'false', description: 'Allow the MUTATING management tools (needs BITBUCKET_MANAGEMENT)' },
