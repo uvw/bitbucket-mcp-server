@@ -210,6 +210,7 @@ export function loadConfig(env: Env = process.env): BitbucketMcpConfig {
     management: {
       enabled: envOptIn(env, ['BITBUCKET_MANAGEMENT']),
       allowWrite: envOptIn(env, ['BITBUCKET_MANAGEMENT_WRITE']),
+      ignoreProtectedBranches: envOptIn(env, ['BITBUCKET_MANAGEMENT_IGNORE_PROTECTED_BRANCHES']),
     },
   };
 }
@@ -226,6 +227,11 @@ export const CONFIG_REFERENCE: Array<{ env: string; def: string; description: st
   { env: 'BITBUCKET_DIALECT', def: '(from base URL)', description: 'Force the API dialect: "cloud" or "server"' },
   { env: 'BITBUCKET_MANAGEMENT', def: 'false', description: 'Expose the repository-management tools' },
   { env: 'BITBUCKET_MANAGEMENT_WRITE', def: 'false', description: 'Allow the MUTATING management tools (needs BITBUCKET_MANAGEMENT)' },
+  {
+    env: 'BITBUCKET_MANAGEMENT_IGNORE_PROTECTED_BRANCHES',
+    def: 'false',
+    description: 'Let management writes weaken or move protection on the main branch and BITBUCKET_PROTECTED_BRANCHES',
+  },
   { env: 'BITBUCKET_HTTP_TIMEOUT_MS', def: '30000', description: 'Per-request timeout for REST calls' },
   { env: 'BITBUCKET_ARCHIVE_TIMEOUT_MS', def: '300000', description: 'Timeout for archive (tar.gz) download streams' },
   { env: 'BITBUCKET_ARCHIVE_STALL_MS', def: '60000', description: 'Destroy an archive stream after this much inactivity' },

@@ -628,7 +628,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'update_repository_settings',
-    description: 'Change repository settings. Renaming via `name` also changes the SLUG and therefore clone URLs. `project_key` moves it between projects. Needs admin:repository.',
+    description: 'Change repository settings. Renaming via `name` also changes the SLUG and therefore clone URLs. `project_key` moves it between projects. Refuses to move the main branch. Needs admin:repository.',
     group: 'management',
     availability: 'cloud_only',
     mutates: true,
@@ -662,7 +662,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'manage_branch_restriction',
-    description: 'Create/update (action=set, idempotent by kind+pattern) or remove (action=delete, needs restriction_id) a branch restriction. A wrong push/restrict_merges rule can lock everyone out, so dry_run first.',
+    description: 'Create/update (action=set, idempotent by kind+pattern) or remove (action=delete, needs restriction_id) a branch restriction. A wrong push/restrict_merges rule can lock everyone out, so dry_run first. On protected branches (main, BITBUCKET_PROTECTED_BRANCHES) only new restrictions are allowed.',
     group: 'management',
     availability: 'cloud_only',
     mutates: true,
@@ -708,7 +708,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'manage_branching_model',
-    description: 'Set branching-model settings at repo or PROJECT scope. Project scope is how you align a whole project at once. Needs admin:repository / admin:project.',
+    description: 'Set branching-model settings at repo or PROJECT scope. Project scope is how you align a whole project at once. Refuses to repoint a development/production branch that is protected. Needs admin:repository / admin:project.',
     group: 'management',
     availability: 'cloud_only',
     mutates: true,

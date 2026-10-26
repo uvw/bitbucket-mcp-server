@@ -32,7 +32,7 @@ function registry(opts: {
     opts.isServer ?? false,
     opts.groups ?? null,
     { readOnly: opts.readOnly ?? false, disabledTools: [], protectedBranches: [] },
-    { enabled: opts.enabled ?? false, allowWrite: opts.allowWrite ?? false }
+    { enabled: opts.enabled ?? false, allowWrite: opts.allowWrite ?? false, ignoreProtectedBranches: false }
   );
   r.register(def({ name: 'mgmt_read' }), noop);
   r.register(def({ name: 'mgmt_write', mutates: true }), noop);
@@ -191,7 +191,7 @@ import { ManagementHandlers } from '../handlers/management-handlers.js';
 
 type Sent = { method: string; path: string; body?: any };
 
-function stubHandlers(responses: Record<string, any> = {}) {
+function stubHandlers(responses: Record<string, any> = {}, cfgOver: Record<string, any> = {}) {
   const sent: Sent[] = [];
   const client: any = {
     clampPageSize: (n: number) => Math.min(n, 100),
@@ -200,12 +200,15 @@ function stubHandlers(responses: Record<string, any> = {}) {
     makeRequest: async (method: string, path: string, body?: any) => {
       sent.push({ method, path, body });
       const key = `${method} ${path.split('?')[0]}`;
-      if (key in responses) return responses[key];
+      if (key in responses) {
+        if (responses[key]?.__throw) throw responses[key].__throw;
+        return responses[key];
+      }
       if (method === 'get') return { values: [] };
       return {};
     },
   };
-  const cfg: any = { pagination: { defaultListLimit: 25 }, output: {} };
+  const cfg: any = { pagination: { defaultListLimit: 25 }, output: {}, ...cfgOver };
   return { h: new ManagementHandlers(client, cfg), sent };
 }
 const textOf = (r: any) => r.content[0].text;
@@ -342,10 +345,9 @@ test('a branching model that cannot be read explains why', async () => {
     },
   };
   const h = new ManagementHandlers(client, { pagination: { defaultListLimit: 25 }, output: {} } as any);
-  await assert.rejects(
-    () => h.handleGetBranchingModel({ workspace: 'w', project_key: 'P' }),
-    /project:admin/
-  );
+  const res = await h.handleGetBranchingModel({ workspace: 'w', project_key: 'P' });
+  assert.equal(res.isError, true);
+  assert.match(String(res.content[0].text), /project:admin/);
 });
 
 test('the transport keeps error.detail, so management can name the missing scope', () => {
@@ -366,12 +368,17 @@ test('the transport keeps error.detail, so management can name the missing scope
 });
 
 test('management gates only open on an explicit true', () => {
-  const gate = (v: string) => loadConfig({ BITBUCKET_TOKEN: 't', BITBUCKET_MANAGEMENT: v, BITBUCKET_MANAGEMENT_WRITE: v }).management;
-  for (const on of ['true', 'TRUE', '1', 'yes', 'on', ' true ']) assert.deepEqual(gate(on), { enabled: true, allowWrite: true }, on);
-  for (const off of ['false', 'False ', '0', 'no', 'off', 'flase', 'disabled', '']) {
-    assert.deepEqual(gate(off), { enabled: false, allowWrite: false }, off);
-  }
-  assert.deepEqual(loadConfig({ BITBUCKET_TOKEN: 't' }).management, { enabled: false, allowWrite: false });
+  const gate = (v: string) =>
+    loadConfig({
+      BITBUCKET_TOKEN: 't',
+      BITBUCKET_MANAGEMENT: v,
+      BITBUCKET_MANAGEMENT_WRITE: v,
+      BITBUCKET_MANAGEMENT_IGNORE_PROTECTED_BRANCHES: v,
+    }).management;
+  const all = (b: boolean) => ({ enabled: b, allowWrite: b, ignoreProtectedBranches: b });
+  for (const on of ['true', 'TRUE', '1', 'yes', 'on', ' true ']) assert.deepEqual(gate(on), all(true), on);
+  for (const off of ['false', 'False ', '0', 'no', 'off', 'flase', 'disabled', '']) assert.deepEqual(gate(off), all(false), off);
+  assert.deepEqual(loadConfig({ BITBUCKET_TOKEN: 't' }).management, all(false));
 });
 
 test('webhooks and pipeline variables refuse project_key instead of widening to workspace scope', async () => {
@@ -395,4 +402,134 @@ test('webhooks and pipeline variables refuse project_key instead of widening to 
     /no project scope/
   );
   assert.deepEqual(sent, []);
+});
+
+// ── protected branches ───────────────────────────────────────────────────────
+// Management writes must not weaken or move protection on the main branch or
+// BITBUCKET_PROTECTED_BRANCHES, while adding protection stays possible.
+
+const REPO = 'get /repositories/w/r';
+const writes = (sent: Sent[]) => sent.filter(x => x.method !== 'get');
+const restriction = (id: number, pattern: string, extra: Record<string, any> = {}) => ({
+  [`get /repositories/w/r/branch-restrictions/${id}`]: { id, kind: 'push', branch_match_kind: 'glob', pattern, ...extra },
+});
+
+test('deleting a restriction on the main branch, or a glob covering it, is refused', async () => {
+  for (const pattern of ['main', '*']) {
+    const { h, sent } = stubHandlers({ [REPO]: { mainbranch: { name: 'main' } }, ...restriction(7, pattern) });
+    const r = await h.handleManageBranchRestriction({ workspace: 'w', repository: 'r', action: 'delete', restriction_id: 7 });
+    assert.equal(r.isError, true, pattern);
+    assert.match(textOf(r), /protected branch/);
+    assert.deepEqual(writes(sent), [], pattern);
+  }
+});
+
+test('BITBUCKET_PROTECTED_BRANCHES globs are protected too, and other branches are not', async () => {
+  const cfg = { access: { protectedBranches: ['release/*'] } };
+  const refused = stubHandlers({ [REPO]: { mainbranch: { name: 'main' } }, ...restriction(8, 'release/1.0') }, cfg);
+  const r1 = await refused.h.handleManageBranchRestriction({ workspace: 'w', repository: 'r', action: 'delete', restriction_id: 8 });
+  assert.equal(r1.isError, true);
+  assert.deepEqual(writes(refused.sent), []);
+
+  const allowed = stubHandlers({ [REPO]: { mainbranch: { name: 'main' } }, ...restriction(9, 'feature/*') }, cfg);
+  const r2 = await allowed.h.handleManageBranchRestriction({ workspace: 'w', repository: 'r', action: 'delete', restriction_id: 9 });
+  assert.equal(r2.isError, undefined);
+  assert.deepEqual(writes(allowed.sent).map(x => x.method), ['delete']);
+});
+
+test('a branching-model restriction resolves through the model', async () => {
+  const { h, sent } = stubHandlers({
+    [REPO]: { mainbranch: { name: 'main' } },
+    ...restriction(3, '', { branch_match_kind: 'branching_model', branch_type: 'production' }),
+    'get /repositories/w/r/branching-model': { production: { name: 'main' }, branch_types: [] },
+  });
+  const r = await h.handleManageBranchRestriction({ workspace: 'w', repository: 'r', action: 'delete', restriction_id: 3 });
+  assert.equal(r.isError, true);
+  assert.deepEqual(writes(sent), []);
+});
+
+test('protecting main is allowed as a create, but an existing main restriction cannot be updated', async () => {
+  const fresh = stubHandlers({ [REPO]: { mainbranch: { name: 'main' } } });
+  const r1 = await fresh.h.handleManageBranchRestriction({ workspace: 'w', repository: 'r', action: 'set', kind: 'force', pattern: 'main' });
+  assert.equal(r1.isError, undefined);
+  assert.deepEqual(writes(fresh.sent).map(x => x.method), ['post']);
+
+  const existing = stubHandlers({
+    [REPO]: { mainbranch: { name: 'main' } },
+    'get /repositories/w/r/branch-restrictions': { values: [{ id: 5, kind: 'force', branch_match_kind: 'glob', pattern: 'main' }] },
+  });
+  const r2 = await existing.h.handleManageBranchRestriction({ workspace: 'w', repository: 'r', action: 'set', kind: 'force', pattern: 'main' });
+  assert.equal(r2.isError, true);
+  assert.deepEqual(writes(existing.sent), []);
+});
+
+test('moving the main branch is refused, dry run included; other settings are not', async () => {
+  for (const dry_run of [false, true]) {
+    const { h, sent } = stubHandlers({ [REPO]: { mainbranch: { name: 'main' } } });
+    const r = await h.handleUpdateRepositorySettings({ workspace: 'w', repository: 'r', main_branch: 'other', dry_run });
+    assert.equal(r.isError, true, `dry_run=${dry_run}`);
+    assert.deepEqual(writes(sent), []);
+  }
+  const { h, sent } = stubHandlers({ [REPO]: { mainbranch: { name: 'main' } } });
+  const r = await h.handleUpdateRepositorySettings({ workspace: 'w', repository: 'r', has_wiki: false });
+  assert.equal(r.isError, undefined);
+  assert.deepEqual(writes(sent).map(x => x.method), ['put']);
+});
+
+test('the branching model cannot repoint a protected development branch, but branch types can change', async () => {
+  const model = { 'get /repositories/w/r/branching-model': { development: { name: 'main', use_mainbranch: true } } };
+  const refused = stubHandlers({ [REPO]: { mainbranch: { name: 'main' } }, ...model });
+  const r1 = await refused.h.handleManageBranchingModel({ workspace: 'w', repository: 'r', development: { name: 'develop', use_mainbranch: false } });
+  assert.equal(r1.isError, true);
+  assert.deepEqual(writes(refused.sent), []);
+
+  const allowed = stubHandlers({ [REPO]: { mainbranch: { name: 'main' } }, ...model });
+  const r2 = await allowed.h.handleManageBranchingModel({ workspace: 'w', repository: 'r', branch_types: [{ kind: 'feature', prefix: 'feat/' }] });
+  assert.equal(r2.isError, undefined);
+  assert.deepEqual(writes(allowed.sent).map(x => x.method), ['put']);
+});
+
+test('BITBUCKET_MANAGEMENT_IGNORE_PROTECTED_BRANCHES turns the check off', async () => {
+  const { h, sent } = stubHandlers(
+    { [REPO]: { mainbranch: { name: 'main' } }, ...restriction(7, 'main') },
+    { management: { ignoreProtectedBranches: true } }
+  );
+  const r = await h.handleManageBranchRestriction({ workspace: 'w', repository: 'r', action: 'delete', restriction_id: 7 });
+  assert.equal(r.isError, undefined);
+  assert.deepEqual(writes(sent).map(x => x.method), ['delete']);
+});
+
+// ── unreadable is not empty ──────────────────────────────────────────────────
+
+const forbidden = { __throw: { status: 403, message: 'Your credentials lack one or more required privilege scopes.', isAxiosError: true } };
+
+test('a permissions read that fails is reported, not shown as an empty list', async () => {
+  const partial = stubHandlers({
+    'get /repositories/w/r/permissions-config/users': forbidden,
+    'get /repositories/w/r/permissions-config/groups': { values: [{ group: { slug: 'devs' }, permission: 'write' }] },
+  });
+  const body = JSON.parse(textOf(await partial.h.handleListRepositoryPermissions({ workspace: 'w', repository: 'r' })));
+  assert.equal(body.users, undefined);
+  assert.match(body.users_error, /^403 .*privilege scopes/);
+  assert.deepEqual(body.groups, [{ group: 'devs', permission: 'write' }]);
+
+  const none = stubHandlers({
+    'get /repositories/w/r/permissions-config/users': forbidden,
+    'get /repositories/w/r/permissions-config/groups': forbidden,
+  });
+  const r = await none.h.handleListRepositoryPermissions({ workspace: 'w', repository: 'r' });
+  assert.equal(r.isError, true);
+  assert.match(textOf(r), /403/);
+});
+
+test('a 404 still means nothing there', async () => {
+  const notFound = { __throw: { status: 404, message: 'Not found', isAxiosError: true } };
+  const { h } = stubHandlers({
+    'get /repositories/w/r/pipelines_config': { enabled: true },
+    'get /repositories/w/r/pipelines_config/schedules': notFound,
+  });
+  const body = JSON.parse(textOf(await h.handleGetPipelinesConfig({ workspace: 'w', repository: 'r' })));
+  assert.equal(body.enabled, true);
+  assert.deepEqual(body.schedules, []);
+  assert.equal(body.schedules_error, undefined);
 });

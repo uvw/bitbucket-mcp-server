@@ -1,6 +1,8 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { BitbucketApiClient, isConflictError } from '../core/api-client.js';
 import { encodeSegment } from '../core/paths.js';
+import { isProtectedBranch } from '../core/access.js';
+import { minimatch } from 'minimatch';
 import { compactObject, errorContent, jsonContent, textContent } from '../formatting/respond.js';
 import type { BitbucketMcpConfig, ToolResponse } from '../types/index.js';
 import * as g from '../tools/guards.js';
@@ -19,6 +21,17 @@ import * as g from '../tools/guards.js';
  * setting is not changed by a project default. And every mutating tool takes
  * `dry_run`, which reports the request it would send and sends nothing.
  */
+/**
+ * Does a branch-restriction glob cover a protected branch or pattern? Either
+ * side may be a glob: `*` covers `main`, and `release/1.0` falls under a
+ * protected `release/*`.
+ */
+export function restrictionCoversProtected(glob: string, patterns: readonly string[]): boolean {
+  return patterns.some(
+    p => p === glob || minimatch(p, glob, { dot: true }) || minimatch(glob, p, { dot: true })
+  );
+}
+
 export class ManagementHandlers {
   constructor(
     private apiClient: BitbucketApiClient,
@@ -112,14 +125,19 @@ export class ManagementHandlers {
         throw new McpError(
           ErrorCode.InvalidRequest,
           `Bitbucket refused this call for lack of token scope. Required: ${required.join(', ')}. ` +
-            `Re-mint the token with that scope ticked. Repository permissions are not the problem.`
+            `Re-mint the token with that scope ticked. Repository permissions are not the problem.`,
+          { status: error?.status }
         );
       }
       // Bitbucket explains most 400s in error.detail, and dropping it leaves a
       // bare "Bad request". "Cannot stop pipeline result that is already
       // complete" is the difference between a diagnosis and a guess.
       if (typeof detail === 'string' && detail) {
-        throw new McpError(ErrorCode.InvalidRequest, `${error?.message || 'Bitbucket rejected the request'}: ${detail}`);
+        throw new McpError(
+          ErrorCode.InvalidRequest,
+          `${error?.message || 'Bitbucket rejected the request'}: ${detail}`,
+          { status: error?.status }
+        );
       }
       throw error;
     }
@@ -184,6 +202,70 @@ export class ManagementHandlers {
     );
   }
 
+  /**
+   * A read whose absence is an answer: a 404 is `null`. Any other failure, a
+   * 403 for a missing scope above all, comes back as `error`, so the caller
+   * reports it instead of presenting an empty result as the truth.
+   */
+  private async tryRead(path: string): Promise<{ value: any; error?: string }> {
+    try {
+      return { value: await this.call<any>('get', path) };
+    } catch (error: any) {
+      const status = error?.status ?? error?.data?.status;
+      if (status === 404) return { value: null };
+      const reason = error?.message || String(error);
+      return { value: null, error: status && !reason.startsWith(String(status)) ? `${status} ${reason}` : reason };
+    }
+  }
+
+  // ── protected branches ─────────────────────────────────────────────────────
+  // BITBUCKET_PROTECTED_BRANCHES stops delete_branch and merge_pull_request.
+  // Management writes can do worse: remove the Bitbucket-side restriction on
+  // main, or repoint the main, development or production branch. So they
+  // refuse anything that weakens or moves protection on a protected branch:
+  // the repository's main branch plus BITBUCKET_PROTECTED_BRANCHES. Adding
+  // protection stays allowed.
+
+  private get guardProtected(): boolean {
+    return !this.cfg.management?.ignoreProtectedBranches;
+  }
+
+  /** The env list, plus the repository's main branch at repository scope. Fails closed if the repo is unreadable. */
+  private async protectedPatterns(args: any): Promise<string[]> {
+    const patterns = [...(this.cfg.access?.protectedBranches ?? [])];
+    if (args.repository) {
+      const repo = await this.call<any>('get', this.repoPath(args.workspace, args.repository));
+      if (repo?.mainbranch?.name) patterns.push(repo.mainbranch.name);
+    }
+    return patterns;
+  }
+
+  private refuseProtected(hit: string, what: string): ToolResponse {
+    return errorContent(
+      `Refused: ${what} would weaken or move protection on protected branch '${hit}' ` +
+        `(the repository's main branch, or BITBUCKET_PROTECTED_BRANCHES). Change it in Bitbucket directly, ` +
+        `or set BITBUCKET_MANAGEMENT_IGNORE_PROTECTED_BRANCHES=true.`
+    );
+  }
+
+  /**
+   * The protected branch a restriction applies to, or null. A branching-model
+   * restriction is resolved through the model, which must be readable: if it
+   * is not, the call fails rather than guessing.
+   */
+  private async restrictionHit(base: string, r: any, patterns: string[]): Promise<string | null> {
+    if (r.branch_match_kind !== 'branching_model') {
+      return r.pattern && restrictionCoversProtected(r.pattern, patterns) ? r.pattern : null;
+    }
+    const model = await this.call<any>('get', `${base}/branching-model`);
+    if (r.branch_type === 'development' || r.branch_type === 'production') {
+      const name = model?.[r.branch_type]?.name;
+      return name && isProtectedBranch(name, patterns) ? name : null;
+    }
+    const prefix = (model?.branch_types || []).find((b: any) => b.kind === r.branch_type)?.prefix;
+    return prefix && restrictionCoversProtected(`${prefix}**`, patterns) ? `${prefix}*` : null;
+  }
+
   private async currentOrNull(path: string): Promise<any> {
     try {
       return await this.apiClient.makeRequest<any>('get', path);
@@ -242,6 +324,10 @@ export class ManagementHandlers {
     const notes: string[] = [];
     if (body.name !== undefined) notes.push('Renaming also changes the repository slug and therefore its clone URLs.');
     if (body.mainbranch) notes.push('The new main branch must already exist.');
+    if (body.mainbranch && this.guardProtected) {
+      const current = (await this.call<any>('get', base))?.mainbranch?.name;
+      if (current && current !== args.main_branch) return this.refuseProtected(current, 'changing the main branch');
+    }
 
     if (args.dry_run) {
       const current = await this.currentOrNull(base);
@@ -305,6 +391,10 @@ export class ManagementHandlers {
         return errorContent('delete needs restriction_id. list_branch_restrictions reports it.');
       }
       const path = `${base}/branch-restrictions/${encodeSegment(String(restriction_id), 'restriction_id')}`;
+      if (this.guardProtected) {
+        const hit = await this.restrictionHit(base, await this.call<any>('get', path), await this.protectedPatterns(args));
+        if (hit) return this.refuseProtected(hit, 'deleting this restriction');
+      }
       if (args.dry_run) return this.planned('delete', path, undefined, await this.currentOrNull(path));
       await this.call('delete', path);
       return jsonContent({ deleted: restriction_id, repository: label });
@@ -340,6 +430,20 @@ export class ManagementHandlers {
           (branch_match_kind === 'glob' ? v.pattern === pattern : v.branch_type === branch_type)
       );
 
+    // On a protected branch a restriction can be added, never changed: an
+    // update can lower a value or add an exemption, so only a fresh create
+    // goes through, with no update fallback on conflict.
+    if (this.guardProtected) {
+      const hit = await this.restrictionHit(base, body, await this.protectedPatterns(args));
+      if (hit) {
+        const values = await this.call<any>('get', `${collection}?pagelen=${CLOUD_COLLECTION_SCAN}`).then((r: any) => r.values || []);
+        if (find(values)) return this.refuseProtected(hit, 'updating an existing restriction');
+        if (args.dry_run) return this.planned('post', collection, body, null, 'No restriction with this kind and pattern exists. It would be CREATED.');
+        const created = await this.call<any>('post', collection, body);
+        return jsonContent(compactObject({ created: created.id, kind: created.kind, pattern: created.pattern ?? undefined, repository: label }));
+      }
+    }
+
     if (args.dry_run) {
       const match = find(await this.call<any>('get', `${collection}?pagelen=${CLOUD_COLLECTION_SCAN}`).then((r: any) => r.values || []));
       return match
@@ -367,18 +471,14 @@ export class ManagementHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for get_branching_model');
     }
     const { base, label } = this.resolveScope(args, 'get_branching_model');
-    const [model, settings] = await Promise.all([
-      this.currentOrNull(`${base}/branching-model`),
-      this.currentOrNull(`${base}/branching-model/settings`),
+    const [modelRead, settingsRead] = await Promise.all([
+      this.tryRead(`${base}/branching-model`),
+      this.tryRead(`${base}/branching-model/settings`),
     ]);
+    const model = modelRead.value;
+    const settings = settingsRead.value;
     if (!model && !settings) {
-      // currentOrNull swallows everything so the partial reads below can degrade
-      // gracefully. When BOTH fail there is nothing to degrade to, and "not
-      // readable" hides the reason: a repository-scoped token cannot reach a
-      // project at all. Re-issue one read so the real error, usually the scope
-      // it wanted, reaches the caller.
-      await this.call<any>('get', `${base}/branching-model`);
-      return errorContent(`No branching model readable for ${label}.`);
+      return errorContent(`No branching model readable for ${label}: ${modelRead.error ?? settingsRead.error ?? 'not found'}`);
     }
     return jsonContent(
       compactObject({
@@ -387,6 +487,7 @@ export class ManagementHandlers {
         production: model?.production && { name: model.production.name, use_mainbranch: model.production.use_mainbranch, enabled: model.production.enabled },
         branch_types: (model?.branch_types || []).map((b: any) => ({ kind: b.kind, prefix: b.prefix })),
         settings_readable: settings ? true : false,
+        settings_error: settingsRead.error,
         settings_note: settings ? undefined : 'Settings need admin:repository (repo) or admin:project (project). The model above is the read-only resolved view.',
       })
     );
@@ -402,6 +503,18 @@ export class ManagementHandlers {
     if (args.production !== undefined) body.production = args.production;
     if (args.branch_types !== undefined) body.branch_types = args.branch_types;
     if (Object.keys(body).length === 0) return errorContent('Nothing to change. Pass development, production, or branch_types.');
+    if (this.guardProtected && (body.development || body.production)) {
+      const [model, patterns] = await Promise.all([this.call<any>('get', `${base}/branching-model`), this.protectedPatterns(args)]);
+      for (const key of ['development', 'production'] as const) {
+        const wanted = body[key];
+        const current = model?.[key];
+        if (!wanted || !current) continue;
+        // At project scope use_mainbranch means every repository's main branch.
+        const isProtected = current.use_mainbranch || (current.name && isProtectedBranch(current.name, patterns));
+        const changes = Object.entries(wanted).some(([k, v]) => current[k] !== v);
+        if (isProtected && changes) return this.refuseProtected(current.name ?? 'main branch', `changing the ${key} branch`);
+      }
+    }
     const path = `${base}/branching-model/settings`;
     if (args.dry_run) return this.planned('put', path, body, await this.currentOrNull(path));
     const r = await this.call<any>('put', path, body);
@@ -457,14 +570,24 @@ export class ManagementHandlers {
     const { base, label } = this.resolveScope(args, 'list_repository_permissions');
     const limit = this.apiClient.clampPageSize(args.limit ?? this.cfg.pagination.defaultListLimit);
     const [users, groups] = await Promise.all([
-      this.currentOrNull(`${base}/permissions-config/users?pagelen=${limit}`),
-      this.currentOrNull(`${base}/permissions-config/groups?pagelen=${limit}`),
+      this.tryRead(`${base}/permissions-config/users?pagelen=${limit}`),
+      this.tryRead(`${base}/permissions-config/groups?pagelen=${limit}`),
     ]);
-    return jsonContent({
-      scope: label,
-      users: (users?.values || []).map((v: any) => compactObject({ user: v.user?.nickname || v.user?.display_name, uuid: v.user?.uuid, permission: v.permission })),
-      groups: (groups?.values || []).map((v: any) => compactObject({ group: v.group?.slug || v.group?.name, permission: v.permission })),
-    });
+    // An unreadable list is not an empty one. Reporting [] for a 403 would read
+    // as "nobody has explicit access".
+    if (users.error && groups.error) {
+      return errorContent(`Could not read permissions for ${label}. Users: ${users.error}. Groups: ${groups.error}.`);
+    }
+    return jsonContent(
+      compactObject({
+        scope: label,
+        users: users.error ? undefined : (users.value?.values || []).map((v: any) => compactObject({ user: v.user?.nickname || v.user?.display_name, uuid: v.user?.uuid, permission: v.permission })),
+        users_error: users.error,
+        groups: groups.error ? undefined : (groups.value?.values || []).map((v: any) => compactObject({ group: v.group?.slug || v.group?.name, permission: v.permission })),
+        groups_error: groups.error,
+        has_more: !!(users.value?.next || groups.value?.next) || undefined,
+      })
+    );
   }
 
   async handleManageRepositoryPermission(args: any): Promise<ToolResponse> {
@@ -497,19 +620,26 @@ export class ManagementHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for get_pipelines_config');
     }
     const { base, label } = this.repoOnly(args, 'get_pipelines_config');
-    const [config, schedules] = await Promise.all([
-      this.currentOrNull(`${base}/pipelines_config`),
-      this.currentOrNull(`${base}/pipelines_config/schedules`),
+    const [configRead, schedulesRead] = await Promise.all([
+      this.tryRead(`${base}/pipelines_config`),
+      this.tryRead(`${base}/pipelines_config/schedules`),
     ]);
+    if (configRead.error && schedulesRead.error) {
+      return errorContent(`Could not read Pipelines config for ${label}: ${configRead.error}`);
+    }
+    const config = configRead.value;
     return jsonContent(
       compactObject({
         repository: label,
         enabled: config?.enabled,
         config_readable: config ? true : false,
-        config_note: config ? undefined : 'pipelines_config needs admin:repository.',
-        schedules: (schedules?.values || []).map((s: any) =>
-          compactObject({ uuid: s.uuid, enabled: s.enabled, cron: s.cron_pattern, target_branch: s.target?.ref_name })
-        ),
+        config_error: configRead.error,
+        schedules: schedulesRead.error
+          ? undefined
+          : (schedulesRead.value?.values || []).map((s: any) =>
+              compactObject({ uuid: s.uuid, enabled: s.enabled, cron: s.cron_pattern, target_branch: s.target?.ref_name })
+            ),
+        schedules_error: schedulesRead.error,
       })
     );
   }

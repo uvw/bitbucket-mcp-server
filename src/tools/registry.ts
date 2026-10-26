@@ -21,7 +21,7 @@ export class ToolRegistry {
     private readonly isServer: boolean,
     private readonly enabledGroups: string[] | null,
     private readonly access: ConfigAccess,
-    private readonly management: ConfigManagement = { enabled: false, allowWrite: false }
+    private readonly management: ConfigManagement = { enabled: false, allowWrite: false, ignoreProtectedBranches: false }
   ) {}
 
   register(definition: ToolDefinition, handler: ToolHandler): void {

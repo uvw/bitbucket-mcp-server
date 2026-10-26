@@ -62,6 +62,13 @@ Off by default. `BITBUCKET_MANAGEMENT=true` exposes the reads; mutations need
 which reports the request that would be sent plus the current value and sends
 nothing.
 
+Writes respect protected branches: the repository's main branch plus
+`BITBUCKET_PROTECTED_BRANCHES`. A restriction covering one can be added but not
+updated or deleted, and the main, development or production branch cannot be
+repointed off one. Set `BITBUCKET_MANAGEMENT_IGNORE_PROTECTED_BRANCHES=true` to
+turn this off. A read that fails reports Bitbucket's reason; only a 404 reads as
+empty.
+
 Most of these exist at **repository or project** scope — pass `project_key`
 instead of `repository` to align a whole project in one call. A repository with
 its own explicit setting is not retroactively changed by a project default.
@@ -157,6 +164,7 @@ Every numeric policy is environment-tunable — nothing is hard-coded. The full 
 | `BITBUCKET_DIALECT` | from base URL | Force `cloud` or `server`. Unset derives it from the base URL — `api.bitbucket.org` is Cloud, anything else is Server/DC |
 | `BITBUCKET_MANAGEMENT` | `false` | Expose the repository-management tools at all |
 | `BITBUCKET_MANAGEMENT_WRITE` | `false` | Allow the **mutating** management tools. Needs `BITBUCKET_MANAGEMENT` too |
+| `BITBUCKET_MANAGEMENT_IGNORE_PROTECTED_BRANCHES` | `false` | Let management writes weaken or move protection on protected branches (see below) |
 
 ### Authentication and dialect
 

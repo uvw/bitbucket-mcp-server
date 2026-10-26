@@ -238,4 +238,9 @@ export type ConfigManagement = {
    * so the read side can audit a fleet while writes stay impossible.
    */
   allowWrite: boolean;
+  /**
+   * Skip the protected-branch check on management writes
+   * (BITBUCKET_MANAGEMENT_IGNORE_PROTECTED_BRANCHES). Off by default.
+   */
+  ignoreProtectedBranches: boolean;
 };
