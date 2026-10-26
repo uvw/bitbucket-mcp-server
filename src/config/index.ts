@@ -48,6 +48,15 @@ function envBool(env: Env, names: string[], fallback: boolean): boolean {
   return !['false', '0', 'no', 'off'].includes(raw.toLowerCase());
 }
 
+/**
+ * Strict opt-in for gates that expose destructive tools. envBool treats any
+ * unrecognised value as true, which fails open on a typo or a stray space.
+ */
+function envOptIn(env: Env, names: string[]): boolean {
+  const raw = pick(env, names);
+  return raw !== undefined && ['true', '1', 'yes', 'on'].includes(raw.trim().toLowerCase());
+}
+
 function envList(env: Env, names: string[]): string[] {
   const raw = pick(env, names);
   if (!raw) return [];
@@ -199,8 +208,8 @@ export function loadConfig(env: Env = process.env): BitbucketMcpConfig {
     },
     toolGroups: parseToolGroups(env),
     management: {
-      enabled: envBool(env, ['BITBUCKET_MANAGEMENT'], false),
-      allowWrite: envBool(env, ['BITBUCKET_MANAGEMENT_WRITE'], false),
+      enabled: envOptIn(env, ['BITBUCKET_MANAGEMENT']),
+      allowWrite: envOptIn(env, ['BITBUCKET_MANAGEMENT_WRITE']),
     },
   };
 }

@@ -49,6 +49,20 @@ export class ManagementHandlers {
     throw new McpError(ErrorCode.InvalidParams, `${what} needs either repository or project_key.`);
   }
 
+  /**
+   * Webhooks and pipeline variables have repository and workspace scope only.
+   * Without this, a project_key would be dropped and the call would fall
+   * through to workspace scope, which covers every repository in it.
+   */
+  private rejectProjectScope(args: any, what: string): void {
+    if (args.project_key) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `${what} has no project scope. Pass repository for one repository, or neither for the whole workspace.`
+      );
+    }
+  }
+
   private workspacePath(workspace: string): string {
     return `/workspaces/${encodeSegment(workspace, 'workspace')}`;
   }
@@ -92,8 +106,7 @@ export class ManagementHandlers {
     try {
       return await this.apiClient.makeRequest<T>(method, path, body);
     } catch (error: any) {
-      const apiError = error?.originalError?.response?.data?.error ?? error?.response?.data?.error;
-      const detail = apiError?.detail;
+      const detail = error?.detail;
       const required: string[] | undefined = detail?.required;
       if (required?.length) {
         throw new McpError(
@@ -106,7 +119,7 @@ export class ManagementHandlers {
       // bare "Bad request". "Cannot stop pipeline result that is already
       // complete" is the difference between a diagnosis and a guess.
       if (typeof detail === 'string' && detail) {
-        throw new McpError(ErrorCode.InvalidRequest, `${apiError?.message ?? 'Bitbucket rejected the request'}: ${detail}`);
+        throw new McpError(ErrorCode.InvalidRequest, `${error?.message || 'Bitbucket rejected the request'}: ${detail}`);
       }
       throw error;
     }
@@ -140,7 +153,7 @@ export class ManagementHandlers {
 
     const existing = find(await list());
     if (existing) {
-      return { record: await this.call<any>('put', `${collection}/${idOf(existing)}`, body), action: 'updated' };
+      return { record: await this.call<any>('put', `${collection}/${encodeSegment(String(idOf(existing)), 'id')}`, body), action: 'updated' };
     }
 
     try {
@@ -155,7 +168,7 @@ export class ManagementHandlers {
             `Bitbucket is briefly inconsistent here. Retry in a moment.`
         );
       }
-      return { record: await this.call<any>('put', `${collection}/${idOf(after)}`, body), action: 'updated' };
+      return { record: await this.call<any>('put', `${collection}/${encodeSegment(String(idOf(after)), 'id')}`, body), action: 'updated' };
     }
   }
 
@@ -330,7 +343,7 @@ export class ManagementHandlers {
     if (args.dry_run) {
       const match = find(await this.call<any>('get', `${collection}?pagelen=${CLOUD_COLLECTION_SCAN}`).then((r: any) => r.values || []));
       return match
-        ? this.planned('put', `${collection}/${match.id}`, body,
+        ? this.planned('put', `${collection}/${encodeSegment(String(match.id), 'id')}`, body,
             { id: match.id, kind: match.kind, pattern: match.pattern, value: match.value ?? undefined },
             'A restriction with this kind and pattern exists. It would be UPDATED, not duplicated.')
         : this.planned('post', collection, body, null, 'No restriction with this kind and pattern exists. It would be CREATED.');
@@ -531,6 +544,7 @@ export class ManagementHandlers {
   /** repo | workspace | deployment-environment variable collection. */
   private variableCollection(args: any): { path: string; label: string } {
     const { workspace, repository, environment_uuid } = args;
+    this.rejectProjectScope(args, 'manage_pipeline_variable');
     if (environment_uuid) {
       if (!repository) throw new McpError(ErrorCode.InvalidParams, 'environment_uuid needs repository.');
       return {
@@ -572,7 +586,7 @@ export class ManagementHandlers {
       const shown = secured ? { ...body, value: '[redacted: secured]' } : body;
       const match = find(await this.call<any>('get', `${collection}?pagelen=${CLOUD_COLLECTION_SCAN}`).then((r: any) => r.values || []));
       return match
-        ? this.planned('put', `${collection}/${match.uuid}`, shown,
+        ? this.planned('put', `${collection}/${encodeSegment(String(match.uuid), 'uuid')}`, shown,
             { uuid: match.uuid, key: match.key, secured: match.secured }, 'Key exists. It would be UPDATED in place.')
         : this.planned('post', collection, shown, null, 'Key does not exist. It would be CREATED.');
     }
@@ -624,6 +638,7 @@ export class ManagementHandlers {
 
   private hookScope(args: any): { base: string; label: string } {
     const { workspace, repository } = args;
+    this.rejectProjectScope(args, 'manage_webhook');
     return repository
       ? { base: this.repoPath(workspace, repository), label: `${workspace}/${repository}` }
       : { base: this.workspacePath(workspace), label: `workspace ${workspace}` };

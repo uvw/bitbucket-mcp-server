@@ -11,6 +11,8 @@ export type ApiError = {
   isAxiosError: boolean;
   /** Response headers (lower-cased names) when a response was received. */
   headers?: Record<string, unknown>;
+  /** Cloud's `error.detail`: a reason string, or `{ required: [...] }` naming a missing token scope. */
+  detail?: unknown;
 };
 
 /** A local file that passed the attachment-root/size/type checks. */

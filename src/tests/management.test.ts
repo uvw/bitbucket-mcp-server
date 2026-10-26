@@ -9,8 +9,10 @@ import {
   isUpdateRepositorySettingsArgs,
   isManagePipelineVariableArgs,
 } from '../tools/guards.js';
-import { isConflictError } from '../core/api-client.js';
+import { BitbucketApiClient, isConflictError } from '../core/api-client.js';
 import type { ToolDefinition } from '../types/index.js';
+import { AxiosError, AxiosHeaders } from 'axios';
+import { loadConfig } from '../config/index.js';
 
 // ── gating ───────────────────────────────────────────────────────────────────
 // The management group can change branch permissions and delete repositories,
@@ -167,16 +169,12 @@ test('update_repository_settings / pipeline variable: optional types stay strict
 
 test('isConflictError: 409, prose, and non-conflicts', () => {
   assert.equal(isConflictError({ status: 409 }), true);
-  assert.equal(isConflictError({ originalError: { response: { status: 409 } } }), true);
   // Branch restrictions answer 400 with the clash in the message.
   assert.equal(
     isConflictError({ status: 400, message: 'a branch restriction with that kind (push) and pattern (main) already exists (id=1)' }),
     true
   );
-  assert.equal(
-    isConflictError({ status: 400, originalError: { response: { data: { error: { message: 'Conflict' } } } } }),
-    true
-  );
+  assert.equal(isConflictError({ status: 400, message: 'Conflict' }), true);
   // Anything else must propagate. Swallowing it turns a real failure into a
   // silent no-op update attempt.
   assert.equal(isConflictError({ status: 403, message: 'Forbidden' }), false);
@@ -315,12 +313,8 @@ test("Bitbucket's error detail is surfaced, not flattened to Bad request", async
       throw {
         status: 400,
         message: 'Bad request',
-        originalError: {
-          response: {
-            status: 400,
-            data: { error: { message: 'Bad request', detail: 'Cannot stop pipeline result that is already complete with status PASSED' } },
-          },
-        },
+        isAxiosError: true,
+        detail: 'Cannot stop pipeline result that is already complete with status PASSED',
       };
     },
   };
@@ -342,7 +336,8 @@ test('a branching model that cannot be read explains why', async () => {
       throw {
         status: 403,
         message: 'Forbidden',
-        originalError: { response: { status: 403, data: { error: { message: 'Forbidden', detail: { required: ['project:admin'] } } } } },
+        isAxiosError: true,
+        detail: { required: ['project:admin'] },
       };
     },
   };
@@ -351,4 +346,53 @@ test('a branching model that cannot be read explains why', async () => {
     () => h.handleGetBranchingModel({ workspace: 'w', project_key: 'P' }),
     /project:admin/
   );
+});
+
+test('the transport keeps error.detail, so management can name the missing scope', () => {
+  // The mocks above stand in for this shape; this pins the real client to it.
+  const client = new BitbucketApiClient(loadConfig({ BITBUCKET_TOKEN: 't' }));
+  const response = {
+    status: 403,
+    statusText: 'Forbidden',
+    headers: {},
+    config: { headers: new AxiosHeaders() },
+    data: { error: { message: 'Forbidden', detail: { required: ['pipeline:write'] } } },
+  };
+  const err = new AxiosError('Request failed', 'ERR_BAD_REQUEST', response.config as any, {}, response as any);
+  assert.throws(
+    () => (client as any).throwApiError(err),
+    (e: any) => e.status === 403 && e.message === 'Forbidden' && e.detail?.required?.[0] === 'pipeline:write' && !('config' in e)
+  );
+});
+
+test('management gates only open on an explicit true', () => {
+  const gate = (v: string) => loadConfig({ BITBUCKET_TOKEN: 't', BITBUCKET_MANAGEMENT: v, BITBUCKET_MANAGEMENT_WRITE: v }).management;
+  for (const on of ['true', 'TRUE', '1', 'yes', 'on', ' true ']) assert.deepEqual(gate(on), { enabled: true, allowWrite: true }, on);
+  for (const off of ['false', 'False ', '0', 'no', 'off', 'flase', 'disabled', '']) {
+    assert.deepEqual(gate(off), { enabled: false, allowWrite: false }, off);
+  }
+  assert.deepEqual(loadConfig({ BITBUCKET_TOKEN: 't' }).management, { enabled: false, allowWrite: false });
+});
+
+test('webhooks and pipeline variables refuse project_key instead of widening to workspace scope', async () => {
+  const sent: Sent[] = [];
+  const client: any = {
+    clampPageSize: (n: number) => n,
+    invalidateRef: () => {},
+    getIsServer: () => false,
+    makeRequest: async (method: string, path: string) => {
+      sent.push({ method, path });
+      return { values: [] };
+    },
+  };
+  const h = new ManagementHandlers(client, { pagination: { defaultListLimit: 25 }, output: {} } as any);
+  await assert.rejects(
+    () => h.handleManageWebhook({ workspace: 'w', project_key: 'P', action: 'create', url: 'https://x.example', events: ['repo:push'] }),
+    /no project scope/
+  );
+  await assert.rejects(
+    () => h.handleManagePipelineVariable({ workspace: 'w', project_key: 'P', action: 'set', key: 'K', value: 'V' }),
+    /no project scope/
+  );
+  assert.deepEqual(sent, []);
 });

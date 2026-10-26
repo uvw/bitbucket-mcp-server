@@ -28,12 +28,6 @@ import { summarizeError } from './redact.js';
 type HttpMethod = 'get' | 'post' | 'put' | 'delete';
 
 /**
- * Maximum `pagelen` Bitbucket Cloud accepts on most paginated endpoints.
- * Above it the answer is 400 "Invalid pagelen": 100 works, 101 fails on /src,
- * /commits and /refs/branches. Server/DC has no such cap,
- * so Server-sized page sizes must be clamped before reaching a Cloud request.
- */
-/**
  * Is this base URL Bitbucket Cloud? Cloud lives at one API host, so anything
  * else is a Server/DC instance. Keeping the dialect on the URL leaves it
  * independent of the credential. The auth scheme says nothing about which API
@@ -54,13 +48,16 @@ export function isCloudBaseUrl(baseUrl: string | undefined): boolean {
  * clash in prose. Both must count so a create can fall back to updating.
  */
 export function isConflictError(error: any): boolean {
-  const status = error?.status ?? error?.originalError?.response?.status ?? error?.response?.status;
-  if (status === 409) return true;
-  const text = String(error?.message ?? '') + ' ' +
-    String(error?.originalError?.response?.data?.error?.message ?? '');
-  return /already exists|conflict/i.test(text);
+  if (error?.status === 409) return true;
+  return /already exists|conflict/i.test(String(error?.message ?? ''));
 }
 
+/**
+ * Maximum `pagelen` Bitbucket Cloud accepts on most paginated endpoints.
+ * Above it the answer is 400 "Invalid pagelen": 100 works, 101 fails on /src,
+ * /commits and /refs/branches. Server/DC has no such cap,
+ * so Server-sized page sizes must be clamped before reaching a Cloud request.
+ */
 export const CLOUD_MAX_PAGELEN = 100;
 
 /**
@@ -234,6 +231,7 @@ export class BitbucketApiClient {
       const rawHeaders = error.response?.headers;
       const headers = rawHeaders ? Object.fromEntries(Object.entries(rawHeaders)) : undefined;
       let message: string = error.message;
+      let detail: unknown;
       // A stream-typed error body (responseType:'stream' on a non-2xx) must
       // be destroyed, or its keep-alive socket never returns to the pool and
       // the agent eventually deadlocks on maxSockets.
@@ -245,8 +243,9 @@ export class BitbucketApiClient {
           respData?.error?.message ||
           respData?.message ||
           error.message;
+        detail = respData?.error?.detail;
       }
-      throw { status, message, isAxiosError: true, headers } as ApiError;
+      throw { status, message, isAxiosError: true, headers, detail } as ApiError;
     }
     throw error;
   }
